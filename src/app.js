@@ -37,11 +37,11 @@ const topicToPhone = new Map(); // topicId -> phone
 const PUBLIC_URL = process.env.PUBLIC_URL; // en Vercel: https://feliz-horizonte-bot.vercel.app
 
 if (PUBLIC_URL) {
-  // Modo webhook (Vercel)
   await bot.setWebHook(`${PUBLIC_URL}/telegram/webhook`).catch(() => {});
   app.post("/telegram/webhook", (req, res) => {
     try {
-      bot.processUpdate(req.body); // <-- MUY IMPORTANTE
+      bot.processUpdate(req.body);      // <- ¡esto procesa el update!
+      console.log("TG webhook ▶", req.body?.message?.text || "(sin texto)");
       res.sendStatus(200);
     } catch (e) {
       console.error("TG webhook error:", e);
@@ -50,7 +50,6 @@ if (PUBLIC_URL) {
   });
   console.log("✅ Telegram en modo webhook");
 } else {
-  // Modo local: polling
   bot.startPolling();
   console.log("✅ Telegram en modo polling (local)");
 }
@@ -138,18 +137,42 @@ function escapeHTML(s = "") {
 
 // Crea/usa topic para un número y guarda el mapeo
 async function ensureTopicForPhone(phone) {
+  // cache rápida por ejecución
   if (phoneToTopic.has(phone)) return phoneToTopic.get(phone);
 
+  // 1) buscar en Supabase (persistente)
+  const { data: found, error: findErr } = await supabase
+    .from("fh_topics")
+    .select("topic_id")
+    .eq("phone", phone)
+    .maybeSingle();
+
+  if (findErr) console.error("SB find topic error:", findErr.message);
+
+  if (found?.topic_id) {
+    phoneToTopic.set(phone, found.topic_id);
+    topicToPhone.set(String(found.topic_id), phone);
+    return found.topic_id;
+  }
+
+  // 2) crear topic si no existe
   try {
     const title = `📱 ${phone}`;
     const topic = await bot.createForumTopic(PANEL_CHAT_ID, title);
-    const topicId = topic.message_thread_id;
+    const topicId = String(topic.message_thread_id);
 
-    topicToPhone.set(String(topicId), phone);
-    phoneToTopic.set(phone, String(topicId));
+    // cache en memoria
+    phoneToTopic.set(phone, topicId);
+    topicToPhone.set(topicId, phone);
 
-    // (NO GUARDAR EN DISCO EN VERCEL)
-    return String(topicId);
+    // persistir
+    const { error: upErr } = await supabase
+      .from("fh_topics")
+      .upsert({ phone, topic_id: topicId });
+
+    if (upErr) console.error("SB upsert topic error:", upErr.message);
+
+    return topicId;
   } catch (err) {
     console.error("❌ Error creando topic:", err?.message);
     if (PANEL_TOPIC_ID) {
