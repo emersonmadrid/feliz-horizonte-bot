@@ -214,6 +214,12 @@ bot.on("message", async (msg) => {
   }
 });
 
+// LOG GLOBAL (DEBUG): quítalo luego
+bot.on("message", (m) => {
+  console.log("ALL ▶", m.chat.id, m.message_thread_id, JSON.stringify(m.text || m.caption || m, null, 2));
+});
+
+
 // ---- HTTP
 app.post("/telegram/webhook", (req, res) => {
   try {
