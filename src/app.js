@@ -222,4 +222,5 @@ loadTopicMap();
 if (process.env.VERCEL !== "1") {
   app.listen(PORT, () => console.log(`🚀 Local en http://localhost:${PORT}`));
 }
-export default (req, res) => app(req, res);
+//export default (req, res) => app(req, res);
+export default app;
