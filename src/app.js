@@ -19,8 +19,8 @@ const PORT = process.env.PORT || 3000;
 
 // ---- conexiones
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-
+//const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN); // modo webhook
 // IDs de Telegram
 const ADMIN = (process.env.TELEGRAM_ADMIN_CHAT_ID || "").toString();
 const PANEL_CHAT_ID = (process.env.TELEGRAM_GROUP_CHAT_ID || "").toString(); // supergrupo con Topics
