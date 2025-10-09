@@ -1,0 +1,17 @@
+{
+  "name": "feliz-horizonte-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/webapp.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.74.0",
+    "axios": "^1.12.2",
+    "body-parser": "^1.20.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}

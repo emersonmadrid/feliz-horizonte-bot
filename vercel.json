@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.js": {
+      "runtime": "nodejs20.x",
+      "memory": 512,
+      "maxDuration": 10
+    }
+  },
+  "routes": [
+    { "src": "/webhook/whatsapp", "dest": "/api/index.js" },
+    { "src": "/telegram/webhook", "dest": "/api/index.js" },
+    { "src": "/", "dest": "/api/index.js" }
+  ]
+}
