@@ -33,11 +33,35 @@ let MODE = "smart"; // auto | manual | smart
 const phoneToTopic = new Map(); // phone -> topicId
 const topicToPhone = new Map(); // topicId -> phone
 
-import fs from "fs";
+// --- Telegram: webhook vs polling
+const PUBLIC_URL = process.env.PUBLIC_URL; // en Vercel: https://feliz-horizonte-bot.vercel.app
 
-const MAP_FILE = "./topicMap.json";
+if (PUBLIC_URL) {
+  // Modo webhook (Vercel)
+  await bot.setWebHook(`${PUBLIC_URL}/telegram/webhook`).catch(() => {});
+  app.post("/telegram/webhook", (req, res) => {
+    try {
+      bot.processUpdate(req.body); // <-- MUY IMPORTANTE
+      res.sendStatus(200);
+    } catch (e) {
+      console.error("TG webhook error:", e);
+      res.sendStatus(200);
+    }
+  });
+  console.log("✅ Telegram en modo webhook");
+} else {
+  // Modo local: polling
+  bot.startPolling();
+  console.log("✅ Telegram en modo polling (local)");
+}
 
-// 🔹 Guarda el mapa de topics en el disco
+
+
+//import fs from "fs";
+
+//const MAP_FILE = "./topicMap.json";
+
+/* // 🔹 Guarda el mapa de topics en el disco
 function saveTopicMap() {
     const obj = {};
     for (const [topic, phone] of topicToPhone.entries()) {
@@ -46,7 +70,7 @@ function saveTopicMap() {
     fs.writeFileSync(MAP_FILE, JSON.stringify(obj, null, 2), "utf-8");
     console.log("💾 Mapa de topics guardado.");
 }
-
+ */
 // 🔹 Carga el mapa de topics al iniciar
 function loadTopicMap() {
     if (fs.existsSync(MAP_FILE)) {
@@ -114,29 +138,27 @@ function escapeHTML(s = "") {
 
 // Crea/usa topic para un número y guarda el mapeo
 async function ensureTopicForPhone(phone) {
-    // ya existe
-    if (phoneToTopic.has(phone)) return phoneToTopic.get(phone);
+  if (phoneToTopic.has(phone)) return phoneToTopic.get(phone);
 
-    try {
-        const title = `📱 ${phone}`;
-        const topic = await bot.createForumTopic(PANEL_CHAT_ID, title);
-        const topicId = topic.message_thread_id;
+  try {
+    const title = `📱 ${phone}`;
+    const topic = await bot.createForumTopic(PANEL_CHAT_ID, title);
+    const topicId = topic.message_thread_id;
 
-        // 🟢 corregido
-        topicToPhone.set(topicId, phone);
-        phoneToTopic.set(phone, topicId);
+    topicToPhone.set(String(topicId), phone);
+    phoneToTopic.set(phone, String(topicId));
 
-        saveTopicMap();
-        return topicId;
-    } catch (err) {
-        console.error("❌ Error creando topic:", err?.message);
-        if (PANEL_TOPIC_ID) {
-            phoneToTopic.set(phone, PANEL_TOPIC_ID);
-            topicToPhone.set(PANEL_TOPIC_ID, phone);
-            return PANEL_TOPIC_ID;
-        }
-        return null;
+    // (NO GUARDAR EN DISCO EN VERCEL)
+    return String(topicId);
+  } catch (err) {
+    console.error("❌ Error creando topic:", err?.message);
+    if (PANEL_TOPIC_ID) {
+      phoneToTopic.set(phone, String(PANEL_TOPIC_ID));
+      topicToPhone.set(String(PANEL_TOPIC_ID), phone);
+      return String(PANEL_TOPIC_ID);
     }
+    return null;
+  }
 }
 
 async function notifyTelegram(title, lines, phone = null) {
@@ -326,7 +348,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     }
 });
 
-loadTopicMap();
+//loadTopicMap();
 //app.listen(PORT, () => console.log(`🚀 FH bot en http://localhost:${PORT}`));
 
 
