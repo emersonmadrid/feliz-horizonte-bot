@@ -1,34 +1,35 @@
-// ─── Configuración base ──────────────────────────────────────────────
-import dotenv from "dotenv";
+// src/app.js
+import "dotenv/config";
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import TelegramBot from "node-telegram-bot-api";
-import { generateAIReply } from "./services/ai.service.js";
 import fs from "fs";
+// Si usas IA:
+import { generateAIReply } from "./services/ai.service.js"; // deja este import si ya lo tienes
 
-dotenv.config();
 const app = express();
 app.use(express.json());
 app.use(bodyParser.json());
 
-// ─── Constantes y Conexiones ─────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+// ─── Conexiones ────────────────────────────────────────────
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// ⚠️ NO USES POLLING en Vercel — cambiamos a webhook mode
+// ⚠️ IMPORTANTE: en Vercel no uses polling. Creamos el bot SIN polling.
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
-const ADMIN = (process.env.TELEGRAM_ADMIN_CHAT_ID || "").toString();
-const PANEL_CHAT_ID = (process.env.TELEGRAM_GROUP_CHAT_ID || "").toString();
-const PANEL_TOPIC_ID = Number(process.env.TELEGRAM_TOPIC_ID_DEFAULT || 0);
-let MODE = "smart";
 
-const phoneToTopic = new Map();
-const topicToPhone = new Map();
+// IDs y config
+const ADMIN = (process.env.TELEGRAM_ADMIN_CHAT_ID || "").toString();
+const PANEL_CHAT_ID = (process.env.TELEGRAM_GROUP_CHAT_ID || "").toString(); // supergrupo con Topics
+const PANEL_TOPIC_ID = Number(process.env.TELEGRAM_TOPIC_ID_DEFAULT || 0);   // topic por defecto (si quieres)
+let MODE = "smart"; // auto | manual | smart
+
+// ─── Mapeo número <-> topic ────────────────────────────────
+const phoneToTopic = new Map(); // phone -> topicId
+const topicToPhone = new Map(); // topicId -> phone
 const MAP_FILE = "./topicMap.json";
 
-// ─── Persistencia de topics ──────────────────────────────────────────
 function saveTopicMap() {
   const obj = {};
   for (const [topic, phone] of topicToPhone.entries()) obj[topic] = phone;
@@ -41,36 +42,42 @@ function loadTopicMap() {
       topicToPhone.set(topic, phone);
       phoneToTopic.set(phone, topic);
     }
+    console.log(`🔁 Mapa restaurado (${topicToPhone.size} topics).`);
+  } else {
+    console.log("📄 Sin mapa previo, iniciando vacío.");
   }
 }
 
-// ─── Utilidades ─────────────────────────────────────────────────────
+// ─── Utilidades ────────────────────────────────────────────
 const emergencyKeywords = [
   "no quiero vivir", "quiero terminar con todo", "me quiero morir", "no vale la pena",
-  "quiero hacerme daño", "suicid", "matarme", "quitarme la vida"
+  "quiero hacerme daño", "pensamientos suicidas", "suicid", "matarme", "quitarme la vida"
 ];
-const crisisMessage = `Lamento profundamente que estés sintiendo esto. Tu vida es valiosa y hay ayuda disponible AHORA mismo.
+
+const crisisMessage =
+`Lamento profundamente que estés sintiendo esto. Tu vida es valiosa y hay ayuda disponible AHORA mismo.
 🆘 LÍNEAS DE EMERGENCIA 24/7:
 📞 Línea 113 - Salud Mental (gratuita, Perú)
 📞 Emergencias: 116 o acude al hospital más cercano
-No estás solo/a. 💙`;
+Por favor, también contacta a un familiar o amigo cercano.
+Cuando estés en un lugar más seguro, estamos aquí para apoyarte. No estás solo/a. 💙`;
 
 function quickAnswers(text) {
-  const t = text.toLowerCase();
+  const t = (text || "").toLowerCase();
   if (/(precio|cu[aá]nto|cuanto)/.test(t))
-    return "Nuestros precios:\n• Terapia psicológica: S/ 140\n• Psiquiatría: S/ 200\n¿Te envío el enlace para agendar?";
-  if (/horario|atienden|abren/.test(t))
-    return "Horarios:\n• L–V: 9:00–20:00\n• Sáb: 9:00–14:00\nDom: cerrado.";
-  if (/pago|pagar|yape|plin/.test(t))
-    return "Aceptamos Yape, Plin y transferencia bancaria.";
+    return "Precios:\n• Terapia psicológica: S/ 140 (50 min, online)\n• Consulta psiquiátrica: S/ 200 (online)\n¿Te envío el enlace para agendar?";
+  if (/horario|atienden|abren|disponibilidad/.test(t))
+    return "Horarios referenciales:\n• L–V: 9:00–20:00\n• Sáb: 9:00–14:00\nDomingo: cerrado. (Confirmamos disponibilidad exacta al agendar).";
+  if (/pago|pagar|yape|plin|transfer/.test(t))
+    return "Formas de pago: Yape, Plin y transferencia bancaria. Te pasamos los datos al confirmar tu cita.";
   if (/psic[oó]log|psiquiatr/.test(t))
-    return "Psicología: terapia conversacional.\nPsiquiatría: médica y farmacológica.";
+    return "Psicología: terapia conversacional.\nPsiquiatría: médica, puede prescribir si corresponde.\n¿En qué quisieras apoyo?";
   return null;
 }
 
 async function sendWhatsAppText(to, text) {
   if (!process.env.WHATSAPP_API_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`(SIMULADO) WhatsApp → ${to}: ${text}`);
+    console.log(`↩️ (SIMULADO) WhatsApp → ${to}: ${text}`);
     return;
   }
   const url = `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -88,32 +95,40 @@ function escapeHTML(s = "") {
 async function ensureTopicForPhone(phone) {
   if (phoneToTopic.has(phone)) return phoneToTopic.get(phone);
   try {
+    if (!PANEL_CHAT_ID) return null;
     const topic = await bot.createForumTopic(PANEL_CHAT_ID, `📱 ${phone}`);
     const id = topic.message_thread_id;
-    topicToPhone.set(id, phone);
-    phoneToTopic.set(phone, id);
+    topicToPhone.set(String(id), phone);
+    phoneToTopic.set(phone, String(id));
     saveTopicMap();
-    return id;
+    return String(id);
   } catch (e) {
-    console.error("Error creando topic:", e.message);
+    console.error("❌ Error creando topic:", e.message);
     if (PANEL_TOPIC_ID) {
-      phoneToTopic.set(phone, PANEL_TOPIC_ID);
-      topicToPhone.set(PANEL_TOPIC_ID, phone);
-      return PANEL_TOPIC_ID;
+      phoneToTopic.set(phone, String(PANEL_TOPIC_ID));
+      topicToPhone.set(String(PANEL_TOPIC_ID), phone);
+      return String(PANEL_TOPIC_ID);
     }
     return null;
   }
 }
 
 async function notifyTelegram(title, lines, phone = null) {
-  const body = `<b>${escapeHTML(title)}</b>\n${lines.map(escapeHTML).join("\n")}${
-    phone ? `\n📱 <code>${escapeHTML(phone)}</code>` : ""
-  }`;
-  const topicId = phone ? await ensureTopicForPhone(phone) : PANEL_TOPIC_ID;
-  if (topicId && PANEL_CHAT_ID)
-    await bot.sendMessage(PANEL_CHAT_ID, body, { parse_mode: "HTML", message_thread_id: topicId });
-  else if (ADMIN)
-    await bot.sendMessage(ADMIN, body, { parse_mode: "HTML" });
+  const body =
+    `<b>${escapeHTML(title)}</b>\n` +
+    lines.map(escapeHTML).join("\n") +
+    (phone ? `\n📱 <code>${escapeHTML(phone)}</code>` : "");
+  const topicId = phone ? await ensureTopicForPhone(phone) : (PANEL_TOPIC_ID || null);
+
+  if (PANEL_CHAT_ID && topicId) {
+    await bot.sendMessage(PANEL_CHAT_ID, body, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      message_thread_id: Number(topicId),
+    });
+  } else if (ADMIN) {
+    await bot.sendMessage(ADMIN, body, { parse_mode: "HTML", disable_web_page_preview: true });
+  }
 }
 
 async function saveMeta({ phone, emergency = false, required_human = false }) {
@@ -124,18 +139,42 @@ async function saveMeta({ phone, emergency = false, required_human = false }) {
   }
 }
 
-// ─── Telegram Webhook Handler ───────────────────────────────────────
-app.post("/telegram/webhook", (req, res) => {
+// ─── Telegram: WEBHOOK (robusto) ───────────────────────────
+// Acepta payloads reales y también pruebas "incompletas" (sin from/date)
+app.post("/telegram/webhook", async (req, res) => {
   try {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
+    const update = req.body;
+    console.log("📩 TG update:", JSON.stringify(update));
+
+    // Si es un update real de Telegram (tiene message.date y message.from.id),
+    // procesamos con la librería:
+    const hasRealShape =
+      !!update?.message?.date && !!update?.message?.from?.id && !!update?.message?.chat?.id;
+
+    if (hasRealShape) {
+      try { bot.processUpdate(update); } catch (e) { console.error("processUpdate error:", e.message); }
+    } else {
+      // Payload de prueba: responde al chat_id si viene
+      const chatId = update?.message?.chat?.id;
+      const text = (update?.message?.text || "").trim().toLowerCase();
+      if (chatId && text === "ping") {
+        const token = process.env.TELEGRAM_BOT_TOKEN;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: "pong (webhook OK)" })
+        });
+      }
+    }
+
+    return res.sendStatus(200);
   } catch (e) {
-    console.error("TG webhook error:", e.message);
-    res.sendStatus(200);
+    console.error("❌ TG webhook error:", e);
+    return res.sendStatus(200);
   }
 });
 
-// ─── Comandos y Mensajes de Telegram ────────────────────────────────
+// ─── Lógica en Telegram (en modo webhook) ──────────────────
 bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
   const chatId = msg.chat.id.toString();
   if (chatId !== ADMIN) return bot.sendMessage(chatId, "No autorizado.");
@@ -146,6 +185,7 @@ bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
   bot.sendMessage(chatId, `✅ Modo actualizado a: ${MODE}`);
 });
 
+// Enviar desde topic (grupo) → WhatsApp
 bot.on("message", async (msg) => {
   try {
     if (String(msg.chat.id) !== String(PANEL_CHAT_ID)) return;
@@ -154,20 +194,24 @@ bot.on("message", async (msg) => {
     const text = (msg.text || "").trim();
     if (!text || text.startsWith("/")) return;
 
-    const topicId = msg.message_thread_id.toString();
+    const topicId = String(msg.message_thread_id);
     const phone = topicToPhone.get(topicId);
     if (!phone) return console.log("⚠️ Sin mapeo para topic", topicId);
 
     await sendWhatsAppText(phone, text);
     await saveMeta({ phone });
-    console.log(`↪️ TG -> WA | topic ${topicId} → ${phone}: ${text}`);
+    await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
+      parse_mode: "HTML",
+      message_thread_id: Number(topicId),
+    });
   } catch (e) {
-    console.error("TG->WA error:", e.message);
+    console.error("TG->WA error:", e?.response?.data || e.message);
   }
 });
 
-// ─── WhatsApp Webhook ───────────────────────────────────────────────
+// ─── WhatsApp Webhook ──────────────────────────────────────
 app.get("/", (_req, res) => res.send("FH WhatsApp Bot ✅"));
+
 app.get("/webhook/whatsapp", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -176,6 +220,7 @@ app.get("/webhook/whatsapp", (req, res) => {
     return res.status(200).send(challenge);
   return res.sendStatus(403);
 });
+
 app.post("/webhook/whatsapp", async (req, res) => {
   try {
     const change = req.body?.entry?.[0]?.changes?.[0]?.value;
@@ -184,43 +229,81 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     const from = msg.from;
     const text = (msg.text?.body || "").trim();
+
     await ensureTopicForPhone(from);
 
-    if (emergencyKeywords.some(k => text.toLowerCase().includes(k))) {
+    // 1) Emergencia
+    const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
+    if (isEmergency) {
       await sendWhatsAppText(from, crisisMessage);
-      await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`"${text}"`, "⚠️ IA bloqueada."], from);
+      await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
       await saveMeta({ phone: from, emergency: true, required_human: true });
       return res.sendStatus(200);
     }
 
+    // 2) Respuestas rápidas
     const quick = quickAnswers(text);
     if (quick) {
       await sendWhatsAppText(from, quick);
-      await notifyTelegram("✅ Respondido automático (Quick)", [`"${text}"`], from);
-      await saveMeta({ phone: from });
+      await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
+      await saveMeta({ phone: from, emergency: false, required_human: false });
       return res.sendStatus(200);
     }
 
-    const { message: aiMessage, meta } = await generateAIReply({ text });
-    let shouldAutoReply = MODE === "auto" || (MODE === "smart" && !/(medicaci|pastilla|diagnost)/i.test(text));
-    await notifyTelegram("🔔 NUEVO MENSAJE", [`🧭 Modo: ${MODE}`, `"${text}"`], from);
-    await saveMeta({ phone: from, required_human: !shouldAutoReply });
+    // 3) IA (si tienes implementado generateAIReply)
+    let aiMessage = null, meta = null;
+    try {
+      const resAI = await generateAIReply({ text });
+      aiMessage = resAI?.message || null;
+      meta = resAI?.meta || null;
+    } catch (e) {
+      console.warn("IA fallback:", e.message);
+    }
 
-    if (shouldAutoReply) {
-      await sendWhatsAppText(from, aiMessage);
+    // 4) Routing por modo + heurística
+    let shouldAutoReply = false;
+    if (MODE === "auto") shouldAutoReply = true;
+    if (MODE === "manual") shouldAutoReply = false;
+    if (MODE === "smart") {
+      const needsHumanHeuristic = /(medicaci|pastilla|recetar|diagnost|menor|pareja|familia|queja|reclamo|factura)/i.test(text);
+      const needsHumanAI = !!meta?.notify_human || meta?.priority === "high";
+      shouldAutoReply = !(needsHumanHeuristic || needsHumanAI);
+    }
+
+    await notifyTelegram("🔔 NUEVO MENSAJE", [
+      `🧭 Modo: ${MODE}`,
+      `💬 "${text}"`,
+      meta ? `🤖 IA: intent=${meta.intent} priority=${meta.priority} notify=${meta.notify_human}` : "🤖 IA: (sin meta)"
+    ], from);
+
+    await saveMeta({ phone: from, emergency: false, required_human: !shouldAutoReply });
+
+    if (shouldAutoReply && (aiMessage || quick)) {
+      await sendWhatsAppText(from, aiMessage || quick);
+    } else if (!shouldAutoReply) {
+      const topicId = phoneToTopic.get(from);
+      if (topicId && PANEL_CHAT_ID) {
+        await bot.sendMessage(PANEL_CHAT_ID, "✍️ Escribe tu respuesta en este mismo tema y la enviaré al WhatsApp del cliente.", {
+          message_thread_id: Number(topicId),
+        });
+      } else if (ADMIN) {
+        await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
+      }
     }
 
     res.sendStatus(200);
   } catch (e) {
-    console.error("Webhook error:", e.message);
-    res.sendStatus(200);
+    console.error("Webhook error:", e?.response?.data || e.message);
+    res.sendStatus(200); // nunca romper
   }
 });
 
-// ─── Inicialización ────────────────────────────────────────────────
+// ─── Inicialización local ──────────────────────────────────
 loadTopicMap();
 if (process.env.VERCEL !== "1") {
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`🚀 Local en http://localhost:${PORT}`));
 }
-//export default (req, res) => app(req, res);
-export default app;
+
+// Handler serverless para Vercel
+export default (req, res) => app(req, res);
