@@ -1,1 +1,5 @@
-node_modules/\n.env\n.vercel\n.DS_Store\nsrc.zip
+node_modules/
+.env
+.vercel
+.DS_Store
+src.zip
