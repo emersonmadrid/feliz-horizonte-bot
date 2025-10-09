@@ -1,4 +1,4 @@
-// src/app.js — MODO MANTENIMIENTO (garantiza 200)
+/* // src/app.js — MODO MANTENIMIENTO (garantiza 200)
 import "dotenv/config";
 import express from "express";
 
@@ -32,8 +32,8 @@ if (process.env.VERCEL !== "1") {
   app.listen(PORT, () => console.log(`Local: http://localhost:${PORT}`));
 }
 
-
-/* // src/app.js
+ */
+// src/app.js
 import "dotenv/config";
 import express from "express";
 import bodyParser from "body-parser";
@@ -176,7 +176,7 @@ async function saveMeta({ phone, emergency = false, required_human = false }) {
 
 // ─── Telegram: WEBHOOK (robusto) ───────────────────────────
 // Acepta payloads reales y también pruebas "incompletas" (sin from/date)
-app.post("/telegram/webhook", async (req, res) => {
+/* app.post("/telegram/webhook", async (req, res) => {
   try {
     const update = req.body;
     console.log("📩 TG update:", JSON.stringify(update));
@@ -208,6 +208,31 @@ app.post("/telegram/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 });
+ */
+app.post("/telegram/webhook", async (req, res) => {
+  try {
+    const u = req.body;
+    console.log("📩 TG update:", JSON.stringify(u));
+
+    const chatId = u?.message?.chat?.id;
+    const text = (u?.message?.text || "").trim().toLowerCase();
+
+    if (chatId && text === "ping") {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: "pong ✅" })
+      });
+    }
+
+    res.sendStatus(200);
+  } catch (e) {
+    console.error("TG webhook error:", e);
+    res.sendStatus(200);
+  }
+});
+
 
 // ─── Lógica en Telegram (en modo webhook) ──────────────────
 bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
@@ -342,4 +367,3 @@ if (process.env.VERCEL !== "1") {
 
 // Handler serverless para Vercel
 export default (req, res) => app(req, res);
- */
