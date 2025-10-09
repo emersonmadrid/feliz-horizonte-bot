@@ -29,7 +29,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Si hay PUBLIC_URL => webhook; si no => polling (local)
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !PUBLIC_URL });
 if (PUBLIC_URL) {
-  // no usamos await para evitar top-level await
   bot.setWebHook(`${PUBLIC_URL}/telegram/webhook`).catch(() => {});
 }
 
@@ -216,6 +215,17 @@ bot.on("message", async (msg) => {
 });
 
 // ---- HTTP
+app.post("/telegram/webhook", (req, res) => {
+  try {
+    bot.processUpdate(req.body);                     // procesa el update recibido
+    console.log("TG webhook ▶", req.body?.message?.text || "(sin texto)");
+    return res.sendStatus(200);
+  } catch (e) {
+    console.error("TG webhook error:", e);
+    return res.sendStatus(200);
+  }
+});
+
 app.get("/", (_req, res) => res.send("FH WhatsApp Bot ✅"));
 
 // Verificación de webhook de WhatsApp (GET)
