@@ -322,10 +322,9 @@ loadTopicMap();
 
 // ---- IMPORTANTE para Vercel ----
 // Exporta la app como handler (Express es compatible)
-export default (req, res) => app(req, res);
-
 // Si corres local, habilita el listener
 if (process.env.VERCEL !== '1') {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`🚀 Local en http://localhost:${PORT}`));
 }
+export default (req, res) => app(req, res);
