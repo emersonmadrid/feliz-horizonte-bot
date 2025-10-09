@@ -9,7 +9,11 @@ import { generateAIReply } from "./services/ai.service.js";
 
 dotenv.config();
 const app = express();
+app.use(express.json()); // << si ya lo tienes, no lo dupliques
+
 app.use(bodyParser.json());
+
+
 
 const PORT = process.env.PORT || 3000;
 
@@ -234,6 +238,12 @@ app.get("/webhook/whatsapp", (req, res) => {
     if (mode === "subscribe" && token === process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) return res.status(200).send(challenge);
     return res.sendStatus(403);
 });
+
+app.post('/telegram/webhook', (req, res) => {
+  console.log('TG webhook hit:', JSON.stringify(req.body));
+  res.sendStatus(200); // Telegram exige 200
+});
+
 
 // ---- webhook principal
 app.post("/webhook/whatsapp", async (req, res) => {
