@@ -1,4 +1,25 @@
-// src/app.js
+// Asegúrate de tener esto arriba en tu app:
+import express from "express";
+const app = express();
+app.use(express.json());
+
+// --- REEMPLAZA tu handler actual por este mínimo:
+app.post("/telegram/webhook", (req, res) => {
+  try {
+    console.log("TG webhook hit (minimal):", JSON.stringify(req.body));
+    // NO referencies envs ni bot aquí. Nada externo.
+    return res.sendStatus(200); // <-- Responder SIEMPRE 200
+  } catch (e) {
+    console.error("TG webhook minimal error:", e);
+    // Aún así respondemos 200 para que Telegram acepte el webhook
+    return res.sendStatus(200);
+  }
+});
+
+// Al final del archivo, asegúrate de tener:
+export default (req, res) => app(req, res);
+
+/* // src/app.js
 import dotenv from "dotenv";
 import express from "express";
 import bodyParser from "body-parser";
@@ -338,3 +359,4 @@ if (process.env.VERCEL !== '1') {
   app.listen(PORT, () => console.log(`🚀 Local en http://localhost:${PORT}`));
 }
 export default (req, res) => app(req, res);
+ */
