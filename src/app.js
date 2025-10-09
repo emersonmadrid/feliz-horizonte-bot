@@ -36,7 +36,7 @@ if (process.env.VERCEL !== "1") {
 // src/app.js
 import "dotenv/config";
 import express from "express";
-import bodyParser from "body-parser";
+//import bodyParser from "body-parser";
 import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import TelegramBot from "node-telegram-bot-api";
@@ -46,7 +46,7 @@ import { generateAIReply } from "./services/ai.service.js"; // deja este import 
 
 const app = express();
 app.use(express.json());
-app.use(bodyParser.json());
+//app.use(bodyParser.json());
 
 // ─── Conexiones ────────────────────────────────────────────
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
