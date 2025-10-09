@@ -1,4 +1,39 @@
-// src/app.js
+// src/app.js — MODO MANTENIMIENTO (garantiza 200)
+import "dotenv/config";
+import express from "express";
+
+const app = express();
+app.use(express.json());
+
+// Salud
+app.get("/", (_req, res) => res.send("FH WhatsApp Bot ✅ (maintenance)"));
+
+// Webhook Telegram: SIEMPRE 200 y log
+app.post("/telegram/webhook", (req, res) => {
+  try {
+    console.log("📩 TG update (maintenance):", JSON.stringify(req.body));
+  } catch (e) {
+    console.error("log error:", e);
+  }
+  // pase lo que pase, responde 200
+  res.sendStatus(200);
+});
+
+// Webhook WhatsApp (stub para no fallar)
+app.get("/webhook/whatsapp", (req, res) => res.sendStatus(200));
+app.post("/webhook/whatsapp", (req, res) => res.sendStatus(200));
+
+// Handler para Vercel
+export default (req, res) => app(req, res);
+
+// Local (opcional)
+if (process.env.VERCEL !== "1") {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log(`Local: http://localhost:${PORT}`));
+}
+
+
+/* // src/app.js
 import "dotenv/config";
 import express from "express";
 import bodyParser from "body-parser";
@@ -307,3 +342,4 @@ if (process.env.VERCEL !== "1") {
 
 // Handler serverless para Vercel
 export default (req, res) => app(req, res);
+ */
