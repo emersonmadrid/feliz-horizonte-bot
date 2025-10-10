@@ -4,6 +4,7 @@ import express from "express";
 import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import TelegramBot from "node-telegram-bot-api";
+import { generateAIReply } from "./services/ai.service.js";
 
 dotenv.config();
 const app = express();
@@ -273,7 +274,34 @@ app.post("/webhook/whatsapp", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    await notifyTelegram("🔔 NUEVO MENSAJE", [`💬 "${text}"`, "🤖 IA: desactivada en demo", "🧑‍⚕️ Requiere humano"], from);
+// 3) IA (Gemini) — reemplaza el bloque donde decías "IA desactivada en demo"
+const { message: aiMessage, meta } = await generateAIReply({ text });
+
+// 4) Notifica a Telegram
+await notifyTelegram("🔔 NUEVO MENSAJE", [
+  `💬 "${text}"`,
+  `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
+], from);
+
+// 5) Decide si auto-responder (puedes dejar siempre true por ahora)
+const shouldAutoReply = meta?.notify_human ? false : true;
+
+await saveMeta({ phone: from, required_human: !shouldAutoReply });
+
+if (shouldAutoReply) {
+  await sendWhatsAppText(from, aiMessage);
+} else {
+  // guía para responder desde el topic
+  const topicId = await ensureTopicForPhone(from);
+  if (topicId && PANEL_CHAT_ID) {
+    await bot.sendMessage(PANEL_CHAT_ID, "✍️ Escribe tu respuesta en este mismo tema y la enviaré al WhatsApp del cliente.", {
+      message_thread_id: topicId,
+    });
+  } else if (ADMIN) {
+    await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
+  }
+}
+
     await saveMeta({ phone: from, required_human: true });
     res.sendStatus(200);
   } catch (e) {
