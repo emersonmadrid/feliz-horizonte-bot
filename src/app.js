@@ -35,22 +35,32 @@ const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !USE_WEBHOOK });
 
 // Solo setear webhook en producción, y con mejor manejo de errores
 if (USE_WEBHOOK) {
-  const webhookUrl = `${PUBLIC_URL}/telegram/webhook`;
+  // Asegurar que PUBLIC_URL no termine con /
+  const baseUrl = PUBLIC_URL.replace(/\/$/, '');
+  const webhookUrl = `${baseUrl}/telegram/webhook`;
+  
   console.log(`🔗 Configurando webhook en producción: ${webhookUrl}`);
   
-  bot.setWebHook(webhookUrl, {
-    drop_pending_updates: true, // Limpia mensajes pendientes
+  // Usar axios directamente para más control
+  axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
+    url: webhookUrl,
+    drop_pending_updates: true,
+    allowed_updates: ["message", "edited_message"]
   })
-    .then(() => {
-      console.log(`✅ Webhook configurado exitosamente en: ${webhookUrl}`);
-      return bot.getWebhookInfo();
+    .then((response) => {
+      console.log(`✅ Webhook configurado exitosamente`);
+      console.log(`📊 Respuesta:`, JSON.stringify(response.data, null, 2));
+      
+      // Verificar configuración con axios
+      return axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`);
     })
-    .then((info) => {
-      console.log(`📊 Webhook info:`, JSON.stringify(info, null, 2));
+    .then((infoResponse) => {
+      console.log(`📊 Webhook info:`, JSON.stringify(infoResponse.data, null, 2));
     })
     .catch((err) => {
-      console.error(`❌ Error configurando webhook:`, err.message);
-      console.error(`⚠️ Deberás configurarlo manualmente o revisar TELEGRAM_BOT_TOKEN`);
+      console.error(`❌ Error configurando webhook:`, err.response?.data || err.message);
+      console.error(`⚠️ URL intentada: ${webhookUrl}`);
+      console.error(`⚠️ Verifica TELEGRAM_BOT_TOKEN y PUBLIC_URL`);
     });
 } else if (VERCEL === "1" && VERCEL_ENV !== "production") {
   console.log(`⚠️ Preview deployment detectado (${VERCEL_ENV}) - NO se configura webhook`);
@@ -154,11 +164,64 @@ async function notifyTelegram(title, lines, phone = null) {
   console.log(`📣 Notificando a Telegram: ${title} | Phone: ${phone || 'N/A'} | Topic: ${topicId}`);
 
   if (topicId && PANEL_CHAT_ID) {
-    await bot.sendMessage(PANEL_CHAT_ID, body, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true,
-      message_thread_id: topicId,
-    });
+    try {
+      await bot.sendMessage(PANEL_CHAT_ID, body, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        message_thread_id: topicId,
+      });
+      console.log(`✅ Mensaje enviado exitosamente al topic ${topicId}`);
+    } catch (err) {
+      console.error(`❌ Error enviando a topic ${topicId}:`, err.message);
+      
+      // Si el topic no existe, intentar recrearlo
+      if (err.message.includes("thread not found") || err.message.includes("message thread not found")) {
+        console.log(`🔄 Topic ${topicId} no existe, recreando...`);
+        
+        try {
+          // Eliminar el registro viejo de la BD
+          if (phone) {
+            await supabase.from("fh_topics").delete().eq("phone", phone);
+            phoneToTopic.delete(phone);
+            topicToPhone.delete(topicId);
+            console.log(`🗑️ Registro viejo eliminado de BD para ${phone}`);
+          }
+          
+          // Crear nuevo topic
+          const newTopicId = await ensureTopicForPhone(phone);
+          console.log(`✅ Nuevo topic creado: ${newTopicId}`);
+          
+          // Reintentar envío con el nuevo topic
+          await bot.sendMessage(PANEL_CHAT_ID, body, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+            message_thread_id: newTopicId,
+          });
+          console.log(`✅ Mensaje enviado al nuevo topic ${newTopicId}`);
+        } catch (retryErr) {
+          console.error(`❌ Error recreando topic:`, retryErr.message);
+          
+          // Último recurso: enviar al admin o al topic por defecto
+          if (PANEL_TOPIC_ID) {
+            await bot.sendMessage(PANEL_CHAT_ID, body, {
+              parse_mode: "HTML",
+              disable_web_page_preview: true,
+              message_thread_id: PANEL_TOPIC_ID,
+            });
+            console.log(`✅ Mensaje enviado al topic por defecto ${PANEL_TOPIC_ID}`);
+          } else if (ADMIN) {
+            await bot.sendMessage(ADMIN, body, { parse_mode: "HTML" });
+            console.log(`✅ Mensaje enviado al admin`);
+          }
+        }
+      } else {
+        // Otro tipo de error, intentar enviar al admin
+        if (ADMIN) {
+          await bot.sendMessage(ADMIN, body, { parse_mode: "HTML" });
+          console.log(`✅ Mensaje enviado al admin por error en topic`);
+        }
+      }
+    }
   } else if (ADMIN) {
     await bot.sendMessage(ADMIN, body, {
       parse_mode: "HTML",
@@ -265,28 +328,62 @@ app.get("/", (_req, res) => {
   });
 });
 
-// Endpoint para verificar/forzar configuración de webhook (SOLO ADMIN)
-app.post("/admin/setup-webhook", async (req, res) => {
-  const { admin_key } = req.body;
+// Endpoint temporal para limpiar topics obsoletos
+app.post("/admin/clean-topic", async (req, res) => {
+  const { admin_key, phone } = req.body;
   
   if (admin_key !== process.env.ADMIN_SETUP_KEY) {
     return res.status(403).json({ error: "No autorizado" });
   }
 
   try {
-    const webhookUrl = `${PUBLIC_URL}/telegram/webhook`;
-    await bot.setWebHook(webhookUrl, { drop_pending_updates: true });
-    const info = await bot.getWebhookInfo();
+    const { data, error } = await supabase
+      .from("fh_topics")
+      .delete()
+      .eq("phone", phone);
+    
+    if (error) throw error;
+    
+    // Limpiar caché
+    const oldTopic = phoneToTopic.get(phone);
+    phoneToTopic.delete(phone);
+    if (oldTopic) topicToPhone.delete(oldTopic);
     
     return res.json({
       success: true,
-      webhook_url: webhookUrl,
-      info
+      message: `Topic para ${phone} eliminado de BD`,
+      data
     });
   } catch (err) {
     return res.status(500).json({
-      error: err.message,
-      details: err
+      error: err.message
+    });
+  }
+});
+
+// Endpoint para listar todos los topics
+app.get("/admin/list-topics", async (req, res) => {
+  const { admin_key } = req.query;
+  
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("fh_topics")
+      .select("*")
+      .order("created_at", { ascending: false });
+    
+    if (error) throw error;
+    
+    return res.json({
+      total: data.length,
+      topics: data
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message
     });
   }
 });
