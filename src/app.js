@@ -297,53 +297,101 @@ app.post("/telegram/webhook", async (req, res) => {
     const update = req.body;
     const msg = update?.message;
     
-    console.log("📥 TELEGRAM WEBHOOK:", JSON.stringify(update, null, 2));
+    console.log("📥 TELEGRAM WEBHOOK RECIBIDO:");
+    console.log(JSON.stringify(update, null, 2));
 
     if (!msg) {
-      console.log("⚠️ Telegram webhook sin mensaje");
+      console.log("⚠️ Telegram webhook sin mensaje (puede ser edit, callback, etc)");
       return res.sendStatus(200);
     }
 
     const chatId = String(msg.chat?.id);
     const text = (msg.text || "").trim();
     const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
+    const fromUser = msg.from?.username || msg.from?.first_name || "Unknown";
+    const isBot = msg.from?.is_bot || false;
 
-    console.log(`📨 Telegram msg | Chat: ${chatId} | Topic: ${topicId} | Texto: "${text}"`);
+    console.log(`📨 TELEGRAM MESSAGE DETAILS:`);
+    console.log(`   Chat ID: ${chatId}`);
+    console.log(`   Topic ID: ${topicId}`);
+    console.log(`   From: ${fromUser} (bot: ${isBot})`);
+    console.log(`   Text: "${text}"`);
+    console.log(`   Panel Chat ID: ${PANEL_CHAT_ID}`);
 
-    // Si es del panel y tiene topic
-    if (chatId === PANEL_CHAT_ID && topicId && text && !text.startsWith("/")) {
+    // Ignorar mensajes de bots
+    if (isBot) {
+      console.log("⚠️ Mensaje de bot, ignorando");
+      return res.sendStatus(200);
+    }
+
+    // Procesar comandos globalmente (no solo en el panel)
+    if (text.startsWith("/")) {
+      console.log(`🤖 Comando detectado: ${text}`);
+      // Los comandos se procesan con bot.onText, solo loguear aquí
+      return res.sendStatus(200);
+    }
+
+    // Si es del panel y tiene topic → reenviar a WhatsApp
+    if (chatId === PANEL_CHAT_ID && topicId && text) {
+      console.log(`✅ Mensaje del panel en topic ${topicId}, procesando...`);
+      
       let phone = topicToPhone.get(topicId);
       
       if (!phone) {
+        console.log(`🔍 Buscando teléfono para topic ${topicId} en Supabase...`);
         const { data: row } = await supabase
           .from("fh_topics")
           .select("phone")
           .eq("topic_id", topicId)
           .maybeSingle();
+        
         if (row?.phone) {
           phone = row.phone;
           topicToPhone.set(topicId, phone);
           phoneToTopic.set(phone, topicId);
+          console.log(`✅ Teléfono encontrado en BD: ${phone}`);
         }
+      } else {
+        console.log(`✅ Teléfono encontrado en caché: ${phone}`);
       }
 
       if (phone) {
-        console.log(`↪️ Reenviando a WhatsApp: ${phone}`);
+        console.log(`📤 REENVIANDO A WHATSAPP:`);
+        console.log(`   Desde topic: ${topicId}`);
+        console.log(`   Hacia número: ${phone}`);
+        console.log(`   Mensaje: "${text}"`);
+        
         await sendWhatsAppText(phone, text);
         await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        
+        console.log(`✅ Mensaje reenviado exitosamente`);
         
         await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
           parse_mode: "HTML",
           message_thread_id: topicId,
         });
       } else {
-        console.log(`⚠️ No se encontró teléfono para topic ${topicId}`);
+        console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
+        console.log(`   Verifica que el topic esté en la tabla fh_topics`);
+        
+        // Notificar en el mismo topic
+        await bot.sendMessage(PANEL_CHAT_ID, 
+          `⚠️ Error: No se encontró el número de teléfono asociado a este topic.\nTopic ID: ${topicId}`, 
+          { message_thread_id: topicId }
+        );
       }
+    } else {
+      console.log(`ℹ️ Mensaje no procesado:`);
+      console.log(`   Es del panel? ${chatId === PANEL_CHAT_ID}`);
+      console.log(`   Tiene topic? ${!!topicId}`);
+      console.log(`   Tiene texto? ${!!text}`);
     }
 
     return res.sendStatus(200);
   } catch (e) {
-    console.error("❌ TG webhook error:", e);
+    console.error("❌ TG WEBHOOK ERROR:");
+    console.error(e);
+    console.error(e.stack);
     return res.sendStatus(200);
   }
 });
