@@ -22,16 +22,41 @@ const {
   WHATSAPP_PHONE_NUMBER_ID,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN,
   VERCEL,
+  VERCEL_ENV, // "production" | "preview" | "development"
 } = process.env;
 
 // --- Conexiones
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !PUBLIC_URL });
 
-if (PUBLIC_URL) {
-  bot.setWebHook(`${PUBLIC_URL}/telegram/webhook`).catch((err) => {
-    console.error("❌ Error setting webhook:", err?.message);
-  });
+// IMPORTANTE: Solo usar webhook si estamos en producción de Vercel
+const USE_WEBHOOK = VERCEL === "1" && VERCEL_ENV === "production" && PUBLIC_URL;
+
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !USE_WEBHOOK });
+
+// Solo setear webhook en producción, y con mejor manejo de errores
+if (USE_WEBHOOK) {
+  const webhookUrl = `${PUBLIC_URL}/telegram/webhook`;
+  console.log(`🔗 Configurando webhook en producción: ${webhookUrl}`);
+  
+  bot.setWebHook(webhookUrl, {
+    drop_pending_updates: true, // Limpia mensajes pendientes
+  })
+    .then(() => {
+      console.log(`✅ Webhook configurado exitosamente en: ${webhookUrl}`);
+      return bot.getWebhookInfo();
+    })
+    .then((info) => {
+      console.log(`📊 Webhook info:`, JSON.stringify(info, null, 2));
+    })
+    .catch((err) => {
+      console.error(`❌ Error configurando webhook:`, err.message);
+      console.error(`⚠️ Deberás configurarlo manualmente o revisar TELEGRAM_BOT_TOKEN`);
+    });
+} else if (VERCEL === "1" && VERCEL_ENV !== "production") {
+  console.log(`⚠️ Preview deployment detectado (${VERCEL_ENV}) - NO se configura webhook`);
+  console.log(`ℹ️ Esta instancia NO procesará mensajes de Telegram`);
+} else {
+  console.log(`🔄 Modo local - usando polling`);
 }
 
 const ADMIN = (TELEGRAM_ADMIN_CHAT_ID || "").toString();
@@ -180,8 +205,8 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
   }
 });
 
-// ---- TG → WA (desde topic) - SOLO SI NO ES WEBHOOK
-if (!PUBLIC_URL) {
+// ---- TG → WA (desde topic) - SOLO EN POLLING (local)
+if (!USE_WEBHOOK) {
   bot.on("message", async (msg) => {
     try {
       if (String(msg.chat.id) !== String(PANEL_CHAT_ID)) return;
@@ -227,6 +252,44 @@ if (!PUBLIC_URL) {
 }
 
 // ---- HTTP ENDPOINTS
+
+app.get("/", (_req, res) => {
+  res.json({
+    status: "✅ FH WhatsApp Bot activo",
+    mode: USE_WEBHOOK ? "webhook" : "polling",
+    env: VERCEL_ENV || "local",
+    endpoints: {
+      telegram: "/telegram/webhook",
+      whatsapp: "/webhook/whatsapp",
+    }
+  });
+});
+
+// Endpoint para verificar/forzar configuración de webhook (SOLO ADMIN)
+app.post("/admin/setup-webhook", async (req, res) => {
+  const { admin_key } = req.body;
+  
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  try {
+    const webhookUrl = `${PUBLIC_URL}/telegram/webhook`;
+    await bot.setWebHook(webhookUrl, { drop_pending_updates: true });
+    const info = await bot.getWebhookInfo();
+    
+    return res.json({
+      success: true,
+      webhook_url: webhookUrl,
+      info
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message,
+      details: err
+    });
+  }
+});
 
 // Webhook de Telegram
 app.post("/telegram/webhook", async (req, res) => {
@@ -284,8 +347,6 @@ app.post("/telegram/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 });
-
-app.get("/", (_req, res) => res.send("FH WhatsApp Bot ✅"));
 
 // Verificación de webhook de WhatsApp (GET)
 app.get("/webhook/whatsapp", (req, res) => {
@@ -384,4 +445,5 @@ if (VERCEL !== "1") {
   const port = process.env.PORT || 3000;
   app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
 }
+
 export default (req, res) => app(req, res);
