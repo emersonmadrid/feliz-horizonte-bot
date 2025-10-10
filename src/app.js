@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json());
 
 const {
-  PUBLIC_URL,                 // p.ej. https://feliz-horizonte-bot.vercel.app
+  PUBLIC_URL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ADMIN_CHAT_ID,
   TELEGRAM_GROUP_CHAT_ID,
@@ -26,20 +26,20 @@ const {
 
 // --- Conexiones
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// Si hay PUBLIC_URL => webhook; si no => polling (local)
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !PUBLIC_URL });
+
 if (PUBLIC_URL) {
-  bot.setWebHook(`${PUBLIC_URL}/telegram/webhook`).catch(() => {});
+  bot.setWebHook(`${PUBLIC_URL}/telegram/webhook`).catch((err) => {
+    console.error("❌ Error setting webhook:", err?.message);
+  });
 }
 
 const ADMIN = (TELEGRAM_ADMIN_CHAT_ID || "").toString();
 const PANEL_CHAT_ID = (TELEGRAM_GROUP_CHAT_ID || "").toString();
 const PANEL_TOPIC_ID = Number(TELEGRAM_TOPIC_ID_DEFAULT || 0);
 
-// Cache en memoria por ejecución
-const phoneToTopic = new Map(); // phone -> topicId
-const topicToPhone = new Map(); // topicId -> phone
+const phoneToTopic = new Map();
+const topicToPhone = new Map();
 
 // ---- Utilidades
 const emergencyKeywords = [
@@ -68,15 +68,17 @@ function quickAnswers(text) {
 
 async function sendWhatsAppText(to, text) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`(SIMULADO) WhatsApp → ${to}: ${text}`);
+    console.log(`📱 [SIMULADO] WhatsApp → ${to}: ${text}`);
     return;
   }
   const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  console.log(`📤 Enviando WhatsApp a ${to}: ${text.substring(0, 50)}...`);
   await axios.post(
     url,
     { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
     { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
   );
+  console.log(`✅ WhatsApp enviado exitosamente a ${to}`);
 }
 
 function escapeHTML(s = "") {
@@ -86,7 +88,6 @@ function escapeHTML(s = "") {
 async function ensureTopicForPhone(phone) {
   if (phoneToTopic.has(phone)) return phoneToTopic.get(phone);
 
-  // 1) buscar en Supabase
   const { data: found } = await supabase
     .from("fh_topics")
     .select("topic_id")
@@ -96,16 +97,17 @@ async function ensureTopicForPhone(phone) {
   if (found?.topic_id) {
     phoneToTopic.set(phone, found.topic_id);
     topicToPhone.set(String(found.topic_id), phone);
+    console.log(`✅ Topic encontrado en BD: ${phone} → ${found.topic_id}`);
     return found.topic_id;
   }
 
-  // 2) crear topic
   try {
     const topic = await bot.createForumTopic(PANEL_CHAT_ID, `📱 ${phone}`);
     const topicId = String(topic.message_thread_id);
     phoneToTopic.set(phone, topicId);
     topicToPhone.set(topicId, phone);
     await supabase.from("fh_topics").upsert({ phone, topic_id: topicId });
+    console.log(`✅ Topic creado: ${phone} → ${topicId}`);
     return topicId;
   } catch (err) {
     console.error("❌ Error creando topic:", err?.message);
@@ -123,6 +125,8 @@ async function notifyTelegram(title, lines, phone = null) {
     phone ? `\n📱 <code>${escapeHTML(phone)}</code>` : ""
   }`;
   const topicId = phone ? await ensureTopicForPhone(phone) : PANEL_TOPIC_ID;
+
+  console.log(`📣 Notificando a Telegram: ${title} | Phone: ${phone || 'N/A'} | Topic: ${topicId}`);
 
   if (topicId && PANEL_CHAT_ID) {
     await bot.sendMessage(PANEL_CHAT_ID, body, {
@@ -144,7 +148,7 @@ async function saveMeta({ phone, emergency = false, required_human = false }) {
       { chat_id: phone, mensaje: emergency ? "[emergency]" : "[msg]" },
     ]);
   } catch (e) {
-    console.error("Supabase error:", e.message);
+    console.error("❌ Supabase error:", e.message);
   }
 }
 
@@ -152,6 +156,7 @@ async function saveMeta({ phone, emergency = false, required_human = false }) {
 let MODE = "smart";
 
 bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
+  console.log(`🤖 Comando /modo recibido de ${msg.chat.id}`);
   if (String(msg.chat.id) !== ADMIN) return bot.sendMessage(msg.chat.id, "No autorizado.");
   const next = (m[1] || "").toLowerCase();
   if (!next) return bot.sendMessage(msg.chat.id, `Modo actual: ${MODE}\nUsa: /modo auto | /modo manual | /modo smart`);
@@ -161,6 +166,7 @@ bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
 });
 
 bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
+  console.log(`📨 Comando /enviar recibido de ${msg.chat.id}`);
   if (String(msg.chat.id) !== ADMIN) return bot.sendMessage(msg.chat.id, "No autorizado.");
   const to = match[1].trim();
   const text = match[2].trim();
@@ -169,66 +175,112 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
     await supabase.from("mensajes").insert([{ chat_id: to, mensaje: "[human]" }]);
     bot.sendMessage(msg.chat.id, `📤 Enviado a ${to}:\n"${text}"`);
   } catch (e) {
+    console.error("❌ Error en /enviar:", e.message);
     bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
   }
 });
 
-// ---- TG → WA (desde topic)
-bot.on("message", async (msg) => {
+// ---- TG → WA (desde topic) - SOLO SI NO ES WEBHOOK
+if (!PUBLIC_URL) {
+  bot.on("message", async (msg) => {
+    try {
+      if (String(msg.chat.id) !== String(PANEL_CHAT_ID)) return;
+      if (!msg.message_thread_id) return;
+      if (msg.from?.is_bot) return;
+
+      const text = (msg.text || "").trim();
+      if (!text || text.startsWith("/")) return;
+
+      const topicId = String(msg.message_thread_id);
+      console.log(`💬 Mensaje en topic ${topicId}: "${text.substring(0, 50)}..."`);
+      
+      let phone = topicToPhone.get(topicId);
+      if (!phone) {
+        const { data: row } = await supabase
+          .from("fh_topics")
+          .select("phone")
+          .eq("topic_id", topicId)
+          .maybeSingle();
+        if (row?.phone) {
+          phone = row.phone;
+          topicToPhone.set(topicId, phone);
+          phoneToTopic.set(phone, topicId);
+        }
+      }
+      if (!phone) {
+        console.log("⚠️ Sin mapeo para topic", topicId);
+        return;
+      }
+
+      await sendWhatsAppText(phone, text);
+      await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+      console.log(`✅ TG → WA | topic ${topicId} → ${phone}`);
+
+      await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
+        parse_mode: "HTML",
+        message_thread_id: msg.message_thread_id,
+      });
+    } catch (e) {
+      console.error("❌ TG→WA error:", e?.response?.data || e.message);
+    }
+  });
+}
+
+// ---- HTTP ENDPOINTS
+
+// Webhook de Telegram
+app.post("/telegram/webhook", async (req, res) => {
   try {
-    if (String(msg.chat.id) !== String(PANEL_CHAT_ID)) return;
-    if (!msg.message_thread_id) return;
-    if (msg.from?.is_bot) return;
+    const update = req.body;
+    const msg = update?.message;
+    
+    console.log("📥 TELEGRAM WEBHOOK:", JSON.stringify(update, null, 2));
 
+    if (!msg) {
+      console.log("⚠️ Telegram webhook sin mensaje");
+      return res.sendStatus(200);
+    }
+
+    const chatId = String(msg.chat?.id);
     const text = (msg.text || "").trim();
-    if (!text || text.startsWith("/")) return;
+    const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
 
-    const topicId = String(msg.message_thread_id);
-    let phone = topicToPhone.get(topicId);
-    if (!phone) {
-      const { data: row } = await supabase
-        .from("fh_topics")
-        .select("phone")
-        .eq("topic_id", topicId)
-        .maybeSingle();
-      if (row?.phone) {
-        phone = row.phone;
-        topicToPhone.set(topicId, phone);
-        phoneToTopic.set(phone, topicId);
+    console.log(`📨 Telegram msg | Chat: ${chatId} | Topic: ${topicId} | Texto: "${text}"`);
+
+    // Si es del panel y tiene topic
+    if (chatId === PANEL_CHAT_ID && topicId && text && !text.startsWith("/")) {
+      let phone = topicToPhone.get(topicId);
+      
+      if (!phone) {
+        const { data: row } = await supabase
+          .from("fh_topics")
+          .select("phone")
+          .eq("topic_id", topicId)
+          .maybeSingle();
+        if (row?.phone) {
+          phone = row.phone;
+          topicToPhone.set(topicId, phone);
+          phoneToTopic.set(phone, topicId);
+        }
+      }
+
+      if (phone) {
+        console.log(`↪️ Reenviando a WhatsApp: ${phone}`);
+        await sendWhatsAppText(phone, text);
+        await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        
+        await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
+          parse_mode: "HTML",
+          message_thread_id: topicId,
+        });
+      } else {
+        console.log(`⚠️ No se encontró teléfono para topic ${topicId}`);
       }
     }
-    if (!phone) {
-      console.log("⚠️ Sin mapeo para topic", topicId);
-      return;
-    }
 
-    await sendWhatsAppText(phone, text);
-    await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
-    console.log(`↪️ TG -> WA | topic ${topicId} → ${phone} : ${text}`);
-
-    await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
-      parse_mode: "HTML",
-      message_thread_id: msg.message_thread_id,
-    });
-  } catch (e) {
-    console.error("TG->WA error:", e?.response?.data || e.message);
-  }
-});
-
-// LOG GLOBAL (DEBUG): quítalo luego
-bot.on("message", (m) => {
-  console.log("ALL ▶", m.chat.id, m.message_thread_id, JSON.stringify(m.text || m.caption || m, null, 2));
-});
-
-
-// ---- HTTP
-app.post("/telegram/webhook", (req, res) => {
-  try {
-    bot.processUpdate(req.body);                     // procesa el update recibido
-    console.log("TG webhook ▶", req.body?.message?.text || "(sin texto)");
     return res.sendStatus(200);
   } catch (e) {
-    console.error("TG webhook error:", e);
+    console.error("❌ TG webhook error:", e);
     return res.sendStatus(200);
   }
 });
@@ -240,72 +292,89 @@ app.get("/webhook/whatsapp", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
+  console.log(`🔍 WhatsApp webhook verification | mode: ${mode} | token: ${token}`);
   if (mode === "subscribe" && token === WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+    console.log("✅ WhatsApp webhook verificado");
     return res.status(200).send(challenge);
   }
+  console.log("❌ WhatsApp webhook verification failed");
   return res.sendStatus(403);
 });
 
-// WhatsApp (POST) — soporta simulador
+// WhatsApp (POST)
 app.post("/webhook/whatsapp", async (req, res) => {
   try {
+    console.log("📥 WHATSAPP WEBHOOK:", JSON.stringify(req.body, null, 2));
+    
     const change = req.body?.entry?.[0]?.changes?.[0]?.value;
     const msg = change?.messages?.[0];
-    if (!msg) return res.sendStatus(200);
+    
+    if (!msg) {
+      console.log("⚠️ WhatsApp webhook sin mensaje");
+      return res.sendStatus(200);
+    }
 
     const from = msg.from;
     const text = (msg.text?.body || "").trim();
 
+    console.log(`💬 WhatsApp de ${from}: "${text}"`);
+
     await ensureTopicForPhone(from);
 
+    // Emergencia
     const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
     if (isEmergency) {
+      console.log(`🚨 EMERGENCIA detectada de ${from}`);
       await sendWhatsAppText(from, crisisMessage);
       await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
       await saveMeta({ phone: from, emergency: true, required_human: true });
       return res.sendStatus(200);
     }
 
+    // Quick answers
     const quick = quickAnswers(text);
     if (quick) {
+      console.log(`⚡ Quick answer para ${from}`);
       await sendWhatsAppText(from, quick);
       await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
       await saveMeta({ phone: from });
       return res.sendStatus(200);
     }
 
-// 3) IA (Gemini) — reemplaza el bloque donde decías "IA desactivada en demo"
-const { message: aiMessage, meta } = await generateAIReply({ text });
+    // IA (Gemini)
+    console.log(`🤖 Consultando IA para mensaje de ${from}`);
+    const { message: aiMessage, meta } = await generateAIReply({ text });
+    console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
 
-// 4) Notifica a Telegram
-await notifyTelegram("🔔 NUEVO MENSAJE", [
-  `💬 "${text}"`,
-  `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
-], from);
+    // Notifica a Telegram
+    await notifyTelegram("🔔 NUEVO MENSAJE", [
+      `💬 "${text}"`,
+      `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
+    ], from);
 
-// 5) Decide si auto-responder (puedes dejar siempre true por ahora)
-const shouldAutoReply = meta?.notify_human ? false : true;
+    // Decide si auto-responder
+    const shouldAutoReply = !meta?.notify_human;
 
-await saveMeta({ phone: from, required_human: !shouldAutoReply });
+    await saveMeta({ phone: from, required_human: !shouldAutoReply });
 
-if (shouldAutoReply) {
-  await sendWhatsAppText(from, aiMessage);
-} else {
-  // guía para responder desde el topic
-  const topicId = await ensureTopicForPhone(from);
-  if (topicId && PANEL_CHAT_ID) {
-    await bot.sendMessage(PANEL_CHAT_ID, "✍️ Escribe tu respuesta en este mismo tema y la enviaré al WhatsApp del cliente.", {
-      message_thread_id: topicId,
-    });
-  } else if (ADMIN) {
-    await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
-  }
-}
+    if (shouldAutoReply) {
+      console.log(`🤖 Auto-respondiendo a ${from}`);
+      await sendWhatsAppText(from, aiMessage);
+    } else {
+      console.log(`👤 Requiere respuesta humana para ${from}`);
+      const topicId = await ensureTopicForPhone(from);
+      if (topicId && PANEL_CHAT_ID) {
+        await bot.sendMessage(PANEL_CHAT_ID, "✍️ Escribe tu respuesta en este mismo tema y la enviaré al WhatsApp del cliente.", {
+          message_thread_id: topicId,
+        });
+      } else if (ADMIN) {
+        await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
+      }
+    }
 
-    await saveMeta({ phone: from, required_human: true });
     res.sendStatus(200);
   } catch (e) {
-    console.error("Webhook error:", e?.response?.data || e.message);
+    console.error("❌ Webhook error:", e?.response?.data || e.message);
     res.sendStatus(200);
   }
 });
@@ -313,6 +382,6 @@ if (shouldAutoReply) {
 // Export para Vercel / local
 if (VERCEL !== "1") {
   const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`Local http://localhost:${port}`));
+  app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
 }
 export default (req, res) => app(req, res);
