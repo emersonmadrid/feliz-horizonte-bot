@@ -1,4 +1,4 @@
-// src/app.js
+// src/app.js - VERSIÓN CORREGIDA
 import dotenv from "dotenv";
 import express from "express";
 import axios from "axios";
@@ -22,26 +22,20 @@ const {
   WHATSAPP_PHONE_NUMBER_ID,
   WHATSAPP_WEBHOOK_VERIFY_TOKEN,
   VERCEL,
-  VERCEL_ENV, // "production" | "preview" | "development"
+  VERCEL_ENV,
 } = process.env;
 
-// --- Conexiones
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// IMPORTANTE: Solo usar webhook si estamos en producción de Vercel
 const USE_WEBHOOK = VERCEL === "1" && VERCEL_ENV === "production" && PUBLIC_URL;
-
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !USE_WEBHOOK });
 
-// Solo setear webhook en producción, y con mejor manejo de errores
+// Configuración webhook (sin cambios)
 if (USE_WEBHOOK) {
-  // Asegurar que PUBLIC_URL no termine con /
   const baseUrl = PUBLIC_URL.replace(/\/$/, '');
   const webhookUrl = `${baseUrl}/telegram/webhook`;
   
   console.log(`🔗 Configurando webhook en producción: ${webhookUrl}`);
   
-  // Usar axios directamente para más control
   axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
     url: webhookUrl,
     drop_pending_updates: true,
@@ -50,8 +44,6 @@ if (USE_WEBHOOK) {
     .then((response) => {
       console.log(`✅ Webhook configurado exitosamente`);
       console.log(`📊 Respuesta:`, JSON.stringify(response.data, null, 2));
-      
-      // Verificar configuración con axios
       return axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`);
     })
     .then((infoResponse) => {
@@ -59,12 +51,9 @@ if (USE_WEBHOOK) {
     })
     .catch((err) => {
       console.error(`❌ Error configurando webhook:`, err.response?.data || err.message);
-      console.error(`⚠️ URL intentada: ${webhookUrl}`);
-      console.error(`⚠️ Verifica TELEGRAM_BOT_TOKEN y PUBLIC_URL`);
     });
 } else if (VERCEL === "1" && VERCEL_ENV !== "production") {
   console.log(`⚠️ Preview deployment detectado (${VERCEL_ENV}) - NO se configura webhook`);
-  console.log(`ℹ️ Esta instancia NO procesará mensajes de Telegram`);
 } else {
   console.log(`🔄 Modo local - usando polling`);
 }
@@ -76,7 +65,26 @@ const PANEL_TOPIC_ID = Number(TELEGRAM_TOPIC_ID_DEFAULT || 0);
 const phoneToTopic = new Map();
 const topicToPhone = new Map();
 
-// ---- Utilidades
+// 🆕 NUEVO: Control de conversaciones activas
+const activeConversations = new Map(); // phone -> { lastMessageTime, context, isHumanHandling }
+
+// 🆕 NUEVO: Lista negra de palabras ofensivas
+const OFFENSIVE_WORDS = [
+  'chucha', 'mierda', 'carajo', 'huevón', 'conchatumadre', 'ctm',
+  'puta', 'verga', 'cojudo', 'imbécil', 'idiota', 'estúpido',
+  'pendejo', 'gil', 'boludo', 'sonso', 'tarado'
+];
+
+// 🆕 NUEVO: Filtro de mensajes ofensivos
+function containsOffensiveLanguage(text) {
+  const lowerText = text.toLowerCase();
+  return OFFENSIVE_WORDS.some(word => {
+    const regex = new RegExp(`\\b${word}\\b`, 'i');
+    return regex.test(lowerText);
+  });
+}
+
+// Palabras de emergencia (sin cambios)
 const emergencyKeywords = [
   "no quiero vivir","quiero terminar con todo","me quiero morir","no vale la pena",
   "quiero hacerme daño","pensamientos suicidas","suicid","matarme","quitarme la vida"
@@ -84,20 +92,31 @@ const emergencyKeywords = [
 const crisisMessage =
   "Lamento profundamente que estés sintiendo esto... 🆘 Línea 113 (Perú) • Emergencias 116 • Acude al hospital más cercano.";
 
-function quickAnswers(text) {
+// 🔧 MEJORADO: Quick answers más inteligentes
+function quickAnswers(text, conversationContext = null) {
   const t = (text || "").toLowerCase();
-  if (/(precio|cu[aá]nto|cuanto)/.test(t)) {
-    return "Nuestros precios:\n• Terapia psicológica: S/ 140 (50 min, online)\n• Consulta psiquiátrica: S/ 200 (online)\n¿Te envío el enlace para agendar?";
+  
+  // Si ya hay contexto de conversación activa, NO usar quick answers
+  if (conversationContext?.isHumanHandling || conversationContext?.awaitingScheduling) {
+    return null;
   }
-  if (/horario|atienden|atenci[oó]n|abren|disponibilidad/.test(t)) {
-    return "Horarios:\n• L–V: 9:00–20:00\n• Sáb: 9:00–14:00\nDomingo cerrado (confirmamos al agendar).";
+  
+  // Solo responder si es una pregunta directa y específica
+  if (/(precio|cu[aá]nto cuesta|cuanto|tarifa|costo)/.test(t) && 
+      !/(agendar|cita|reservar)/.test(t)) {
+    return "Nuestros precios:\n• Terapia psicológica: S/ 140 (50 min, online)\n• Consulta psiquiátrica: S/ 200 (online)\n¿Te gustaría agendar una cita?";
   }
-  if (/pago|pagar|yape|plin|transfer/.test(t)) {
-    return "Formas de pago: Yape, Plin y transferencia. Pasamos los datos al confirmar la cita.";
+  
+  if (/(horario|atienden|atenci[oó]n|abren|disponibilidad)/.test(t) &&
+      !/(agendar|cita|reservar)/.test(t)) {
+    return "Horarios:\n• L–V: 9:00–20:00\n• Sáb: 9:00–14:00\nDomingo cerrado.\n¿Deseas agendar?";
   }
-  if (/psic[oó]log|psiquiatr/.test(t)) {
-    return "Psicología: terapia conversacional.\nPsiquiatría: evaluación médica y prescripción si corresponde.\n¿En qué quisieras apoyo?";
+  
+  if (/(pago|pagar|yape|plin|transfer)/.test(t) &&
+      !/(agendar|cita|reservar)/.test(t)) {
+    return "Formas de pago: Yape, Plin y transferencia. Te compartimos los datos al confirmar la cita.";
   }
+  
   return null;
 }
 
@@ -174,12 +193,10 @@ async function notifyTelegram(title, lines, phone = null) {
     } catch (err) {
       console.error(`❌ Error enviando a topic ${topicId}:`, err.message);
       
-      // Si el topic no existe, intentar recrearlo
       if (err.message.includes("thread not found") || err.message.includes("message thread not found")) {
         console.log(`🔄 Topic ${topicId} no existe, recreando...`);
         
         try {
-          // Eliminar el registro viejo de la BD
           if (phone) {
             await supabase.from("fh_topics").delete().eq("phone", phone);
             phoneToTopic.delete(phone);
@@ -187,11 +204,9 @@ async function notifyTelegram(title, lines, phone = null) {
             console.log(`🗑️ Registro viejo eliminado de BD para ${phone}`);
           }
           
-          // Crear nuevo topic
           const newTopicId = await ensureTopicForPhone(phone);
           console.log(`✅ Nuevo topic creado: ${newTopicId}`);
           
-          // Reintentar envío con el nuevo topic
           await bot.sendMessage(PANEL_CHAT_ID, body, {
             parse_mode: "HTML",
             disable_web_page_preview: true,
@@ -201,7 +216,6 @@ async function notifyTelegram(title, lines, phone = null) {
         } catch (retryErr) {
           console.error(`❌ Error recreando topic:`, retryErr.message);
           
-          // Último recurso: enviar al admin o al topic por defecto
           if (PANEL_TOPIC_ID) {
             await bot.sendMessage(PANEL_CHAT_ID, body, {
               parse_mode: "HTML",
@@ -215,7 +229,6 @@ async function notifyTelegram(title, lines, phone = null) {
           }
         }
       } else {
-        // Otro tipo de error, intentar enviar al admin
         if (ADMIN) {
           await bot.sendMessage(ADMIN, body, { parse_mode: "HTML" });
           console.log(`✅ Mensaje enviado al admin por error en topic`);
@@ -240,7 +253,7 @@ async function saveMeta({ phone, emergency = false, required_human = false }) {
   }
 }
 
-// ---- TG comandos
+// Comandos de Telegram (sin cambios en modo)
 let MODE = "smart";
 
 bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
@@ -268,7 +281,7 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
   }
 });
 
-// ---- TG → WA (desde topic) - SOLO EN POLLING (local)
+// 🔧 MEJORADO: TG → WA con filtro de mensajes ofensivos
 if (!USE_WEBHOOK) {
   bot.on("message", async (msg) => {
     try {
@@ -278,6 +291,34 @@ if (!USE_WEBHOOK) {
 
       const text = (msg.text || "").trim();
       if (!text || text.startsWith("/")) return;
+
+      // 🆕 NUEVO: Filtro de lenguaje ofensivo
+      if (containsOffensiveLanguage(text)) {
+        console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO de ${msg.from.username || msg.from.first_name}`);
+        await bot.sendMessage(PANEL_CHAT_ID, 
+          `⚠️ <b>MENSAJE BLOQUEADO</b>\n\n` +
+          `El mensaje contenía lenguaje inapropiado y NO fue enviado al cliente.\n\n` +
+          `Por favor, mantén un lenguaje profesional y empático en todo momento.\n\n` +
+          `<i>Usuario: @${msg.from.username || msg.from.first_name}</i>`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: msg.message_thread_id,
+          }
+        );
+        
+        // Notificar al admin
+        if (ADMIN && String(msg.chat.id) !== ADMIN) {
+          await bot.sendMessage(ADMIN, 
+            `⚠️ <b>ALERTA: Mensaje ofensivo bloqueado</b>\n\n` +
+            `Usuario: @${msg.from.username || msg.from.first_name}\n` +
+            `Topic: ${msg.message_thread_id}\n` +
+            `Mensaje: "${text}"\n\n` +
+            `El mensaje NO fue enviado al cliente.`,
+            { parse_mode: "HTML" }
+          );
+        }
+        return;
+      }
 
       const topicId = String(msg.message_thread_id);
       console.log(`💬 Mensaje en topic ${topicId}: "${text.substring(0, 50)}..."`);
@@ -300,6 +341,13 @@ if (!USE_WEBHOOK) {
         return;
       }
 
+      // 🆕 NUEVO: Marcar que un humano está manejando la conversación
+      activeConversations.set(phone, {
+        lastMessageTime: Date.now(),
+        isHumanHandling: true,
+        awaitingScheduling: false
+      });
+
       await sendWhatsAppText(phone, text);
       await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
       console.log(`✅ TG → WA | topic ${topicId} → ${phone}`);
@@ -314,7 +362,7 @@ if (!USE_WEBHOOK) {
   });
 }
 
-// ---- HTTP ENDPOINTS
+// HTTP ENDPOINTS
 
 app.get("/", (_req, res) => {
   res.json({
@@ -328,7 +376,7 @@ app.get("/", (_req, res) => {
   });
 });
 
-// Endpoint temporal para limpiar topics obsoletos
+// Endpoints de admin (sin cambios)
 app.post("/admin/clean-topic", async (req, res) => {
   const { admin_key, phone } = req.body;
   
@@ -344,7 +392,6 @@ app.post("/admin/clean-topic", async (req, res) => {
     
     if (error) throw error;
     
-    // Limpiar caché
     const oldTopic = phoneToTopic.get(phone);
     phoneToTopic.delete(phone);
     if (oldTopic) topicToPhone.delete(oldTopic);
@@ -361,7 +408,6 @@ app.post("/admin/clean-topic", async (req, res) => {
   }
 });
 
-// Endpoint para listar todos los topics
 app.get("/admin/list-topics", async (req, res) => {
   const { admin_key } = req.query;
   
@@ -388,7 +434,7 @@ app.get("/admin/list-topics", async (req, res) => {
   }
 });
 
-// Webhook de Telegram
+// 🔧 MEJORADO: Webhook de Telegram con filtro de ofensas
 app.post("/telegram/webhook", async (req, res) => {
   try {
     const update = req.body;
@@ -398,7 +444,7 @@ app.post("/telegram/webhook", async (req, res) => {
     console.log(JSON.stringify(update, null, 2));
 
     if (!msg) {
-      console.log("⚠️ Telegram webhook sin mensaje (puede ser edit, callback, etc)");
+      console.log("⚠️ Telegram webhook sin mensaje");
       return res.sendStatus(200);
     }
 
@@ -413,23 +459,45 @@ app.post("/telegram/webhook", async (req, res) => {
     console.log(`   Topic ID: ${topicId}`);
     console.log(`   From: ${fromUser} (bot: ${isBot})`);
     console.log(`   Text: "${text}"`);
-    console.log(`   Panel Chat ID: ${PANEL_CHAT_ID}`);
 
-    // Ignorar mensajes de bots
     if (isBot) {
       console.log("⚠️ Mensaje de bot, ignorando");
       return res.sendStatus(200);
     }
 
-    // Procesar comandos globalmente (no solo en el panel)
     if (text.startsWith("/")) {
       console.log(`🤖 Comando detectado: ${text}`);
-      // Los comandos se procesan con bot.onText, solo loguear aquí
       return res.sendStatus(200);
     }
 
-    // Si es del panel y tiene topic → reenviar a WhatsApp
+    // 🆕 NUEVO: Filtro de lenguaje ofensivo en webhook
     if (chatId === PANEL_CHAT_ID && topicId && text) {
+      if (containsOffensiveLanguage(text)) {
+        console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
+        await bot.sendMessage(PANEL_CHAT_ID, 
+          `⚠️ <b>MENSAJE BLOQUEADO</b>\n\n` +
+          `El mensaje contenía lenguaje inapropiado y NO fue enviado al cliente.\n\n` +
+          `Por favor, mantén un lenguaje profesional y empático en todo momento.\n\n` +
+          `<i>Usuario: @${fromUser}</i>`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: topicId,
+          }
+        );
+        
+        if (ADMIN && chatId !== ADMIN) {
+          await bot.sendMessage(ADMIN, 
+            `⚠️ <b>ALERTA: Mensaje ofensivo bloqueado</b>\n\n` +
+            `Usuario: @${fromUser}\n` +
+            `Topic: ${topicId}\n` +
+            `Mensaje: "${text}"\n\n` +
+            `El mensaje NO fue enviado al cliente.`,
+            { parse_mode: "HTML" }
+          );
+        }
+        return res.sendStatus(200);
+      }
+
       console.log(`✅ Mensaje del panel en topic ${topicId}, procesando...`);
       
       let phone = topicToPhone.get(topicId);
@@ -458,6 +526,13 @@ app.post("/telegram/webhook", async (req, res) => {
         console.log(`   Hacia número: ${phone}`);
         console.log(`   Mensaje: "${text}"`);
         
+        // 🆕 NUEVO: Marcar conversación como manejada por humano
+        activeConversations.set(phone, {
+          lastMessageTime: Date.now(),
+          isHumanHandling: true,
+          awaitingScheduling: false
+        });
+        
         await sendWhatsAppText(phone, text);
         await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
         
@@ -469,31 +544,23 @@ app.post("/telegram/webhook", async (req, res) => {
         });
       } else {
         console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
-        console.log(`   Verifica que el topic esté en la tabla fh_topics`);
         
-        // Notificar en el mismo topic
         await bot.sendMessage(PANEL_CHAT_ID, 
           `⚠️ Error: No se encontró el número de teléfono asociado a este topic.\nTopic ID: ${topicId}`, 
           { message_thread_id: topicId }
         );
       }
-    } else {
-      console.log(`ℹ️ Mensaje no procesado:`);
-      console.log(`   Es del panel? ${chatId === PANEL_CHAT_ID}`);
-      console.log(`   Tiene topic? ${!!topicId}`);
-      console.log(`   Tiene texto? ${!!text}`);
     }
 
     return res.sendStatus(200);
   } catch (e) {
     console.error("❌ TG WEBHOOK ERROR:");
     console.error(e);
-    console.error(e.stack);
     return res.sendStatus(200);
   }
 });
 
-// Verificación de webhook de WhatsApp (GET)
+// Webhook de WhatsApp (GET - verificación)
 app.get("/webhook/whatsapp", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -507,7 +574,7 @@ app.get("/webhook/whatsapp", (req, res) => {
   return res.sendStatus(403);
 });
 
-// WhatsApp (POST)
+// 🔧 MEJORADO: WhatsApp webhook con mejor manejo de contexto
 app.post("/webhook/whatsapp", async (req, res) => {
   try {
     console.log("📥 WHATSAPP WEBHOOK:", JSON.stringify(req.body, null, 2));
@@ -527,29 +594,72 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     await ensureTopicForPhone(from);
 
-    // Emergencia
+    // 🆕 NUEVO: Obtener contexto de conversación
+    const conversationContext = activeConversations.get(from);
+    const timeSinceLastMessage = conversationContext 
+      ? Date.now() - conversationContext.lastMessageTime 
+      : Infinity;
+    
+    // Si pasaron más de 15 minutos, resetear el flag de humano
+    if (timeSinceLastMessage > 15 * 60 * 1000) {
+      if (conversationContext) {
+        conversationContext.isHumanHandling = false;
+      }
+    }
+
+    // Emergencia (sin cambios)
     const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
     if (isEmergency) {
       console.log(`🚨 EMERGENCIA detectada de ${from}`);
       await sendWhatsAppText(from, crisisMessage);
       await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
       await saveMeta({ phone: from, emergency: true, required_human: true });
+      
+      activeConversations.set(from, {
+        lastMessageTime: Date.now(),
+        isHumanHandling: true,
+        awaitingScheduling: false
+      });
+      
       return res.sendStatus(200);
     }
 
-    // Quick answers
-    const quick = quickAnswers(text);
+    // 🔧 MEJORADO: Quick answers con contexto
+    const quick = quickAnswers(text, conversationContext);
     if (quick) {
       console.log(`⚡ Quick answer para ${from}`);
       await sendWhatsAppText(from, quick);
       await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
       await saveMeta({ phone: from });
+      
+      activeConversations.set(from, {
+        lastMessageTime: Date.now(),
+        isHumanHandling: false,
+        awaitingScheduling: false
+      });
+      
+      return res.sendStatus(200);
+    }
+
+    // 🆕 NUEVO: Si un humano está manejando, NO responder con IA
+    if (conversationContext?.isHumanHandling && timeSinceLastMessage < 15 * 60 * 1000) {
+      console.log(`👤 Conversación manejada por humano, solo notificando...`);
+      await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [`💬 "${text}"`], from);
+      await saveMeta({ phone: from, required_human: true });
+      
+      // Actualizar timestamp
+      conversationContext.lastMessageTime = Date.now();
+      
       return res.sendStatus(200);
     }
 
     // IA (Gemini)
     console.log(`🤖 Consultando IA para mensaje de ${from}`);
-    const { message: aiMessage, meta } = await generateAIReply({ text });
+    const { message: aiMessage, meta } = await generateAIReply({ 
+      text, 
+      conversationContext,
+      phone: from  // 🆕 Pasar el teléfono para historial
+    });
     console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
 
     // Notifica a Telegram
@@ -563,6 +673,17 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     await saveMeta({ phone: from, required_human: !shouldAutoReply });
 
+    // 🆕 NUEVO: Actualizar contexto de conversación
+    const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
+    
+    activeConversations.set(from, {
+      lastMessageTime: Date.now(),
+      isHumanHandling: !shouldAutoReply,
+      awaitingScheduling: isSchedulingIntent,
+      lastIntent: meta?.intent,
+      context: text
+    });
+
     if (shouldAutoReply) {
       console.log(`🤖 Auto-respondiendo a ${from}`);
       await sendWhatsAppText(from, aiMessage);
@@ -570,9 +691,16 @@ app.post("/webhook/whatsapp", async (req, res) => {
       console.log(`👤 Requiere respuesta humana para ${from}`);
       const topicId = await ensureTopicForPhone(from);
       if (topicId && PANEL_CHAT_ID) {
-        await bot.sendMessage(PANEL_CHAT_ID, "✍️ Escribe tu respuesta en este mismo tema y la enviaré al WhatsApp del cliente.", {
-          message_thread_id: topicId,
-        });
+        await bot.sendMessage(PANEL_CHAT_ID, 
+          `⚠️ <b>REQUIERE ATENCIÓN HUMANA</b>\n\n` +
+          `El cliente necesita ayuda personalizada.\n` +
+          `✍️ Escribe tu respuesta en este tema.\n\n` +
+          `<i>Contexto: ${meta?.intent || 'general'} (prioridad: ${meta?.priority || 'low'})</i>`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: topicId,
+          }
+        );
       } else if (ADMIN) {
         await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
       }
@@ -585,10 +713,53 @@ app.post("/webhook/whatsapp", async (req, res) => {
   }
 });
 
+// 🆕 NUEVO: Endpoint para resetear conversación (útil para testing)
+app.post("/admin/reset-conversation", async (req, res) => {
+  const { admin_key, phone } = req.body;
+  
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  activeConversations.delete(phone);
+  
+  return res.json({
+    success: true,
+    message: `Conversación para ${phone} reseteada`
+  });
+});
+
+// 🆕 NUEVO: Endpoint para ver conversaciones activas
+app.get("/admin/active-conversations", async (req, res) => {
+  const { admin_key } = req.query;
+  
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  const conversations = [];
+  const now = Date.now();
+  
+  for (const [phone, context] of activeConversations.entries()) {
+    conversations.push({
+      phone,
+      isHumanHandling: context.isHumanHandling,
+      awaitingScheduling: context.awaitingScheduling,
+      lastIntent: context.lastIntent,
+      minutesSinceLastMessage: Math.floor((now - context.lastMessageTime) / 60000)
+    });
+  }
+  
+  return res.json({
+    total: conversations.length,
+    conversations
+  });
+});
+
 // Export para Vercel / local
 if (VERCEL !== "1") {
   const port = process.env.PORT || 3000;
   app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
 }
 
-export default (req, res) => app(req, res);
+export default (req, res) => app(req, res)
