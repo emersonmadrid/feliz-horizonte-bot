@@ -695,13 +695,21 @@ app.post("/webhook/whatsapp", async (req, res) => {
       conversationContext = ensureConversationState(from);
     }
 
+    let justSentButtons = false;
+
     if (!conversationContext.buttonsSent) {
       try {
         await sendWhatsAppButtons(from);
         conversationContext = mergeConversationState(from, { buttonsSent: true });
+        justSentButtons = true;
       } catch (err) {
         console.error("❌ Error enviando botones de bienvenida:", err?.response?.data || err.message);
       }
+    }
+
+    if (justSentButtons && !buttonSelection) {
+      console.log(`⏸️ Botones enviados a ${from}, esperando selección antes de responder con IA`);
+      return res.sendStatus(200);
     }
 
     // Si pasaron más de 15 minutos, resetear el flag de humano
