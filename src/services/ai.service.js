@@ -133,14 +133,32 @@ Palabras: "suicidio", "matarme", "no quiero vivir", "hacerme daño", "acabar con
 Un profesional de nuestro equipo se contactará contigo de inmediato."
 → intent: "crisis", priority: "high", notify_human: true
 
-FORMATO DE RESPUESTA:
+FORMATO DE RESPUESTA - MUY IMPORTANTE:
 
-**Estructura obligatoria:**
-[MENSAJE PARA WHATSAPP]
-[Línea en blanco]
-{"intent":"X", "priority":"low|medium|high", "notify_human":true|false, "service":"therapy|psychiatry|null", "suggested_actions":["X"], "confidence":0.0-1.0}
+Debes responder en DOS partes claramente separadas:
 
-**JSON debe ser UNA SOLA LÍNEA sin saltos.**
+**PARTE 1: TU MENSAJE (líneas 1 a N-2)**
+Escribe aquí tu respuesta empática para el cliente (3-5 líneas).
+NO incluyas ningún código, JSON ni caracteres especiales como { o }.
+
+**PARTE 2: LÍNEA EN BLANCO**
+
+**PARTE 3: JSON EN UNA SOLA LÍNEA (última línea)**
+{"intent":"X", "priority":"low|medium|high", "notify_human":true|false, "service":"therapy|psychiatry|null", "suggested_actions":[], "confidence":0.0-1.0}
+
+EJEMPLO CORRECTO:
+```
+¡Perfecto! Nuestras terapias son para todas las edades. ¿Tu mamá prefiere psicología o psiquiatría? Así te comparto el link para agendar. 😊
+
+{"intent":"agendar","priority":"low","notify_human":false,"service":null,"suggested_actions":["ask_service"],"confidence":0.9}
+```
+
+NUNCA HAGAS ESTO (INCORRECTO):
+```
+¡Perfecto! {"intent":"agendar"} Nuestras terapias...
+```
+
+El JSON SIEMPRE va al final, NUNCA en medio del mensaje.
 
 ESTRATEGIA CONVERSACIONAL:
 
@@ -257,7 +275,24 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     });
     
     const out = result.response.text().trim();
+    
+    // 🆕 DEBUG: Mostrar respuesta cruda de IA
+    console.log(`🤖 RESPUESTA CRUDA DE IA:`);
+    console.log(`---START---`);
+    console.log(out);
+    console.log(`---END---`);
+    
     const { message, meta } = parseAIResponse(out, text);
+    
+    // 🆕 DEBUG: Mostrar parsing
+    console.log(`📝 MENSAJE PARSEADO: "${message.substring(0, 150)}..."`);
+    console.log(`📊 META PARSEADO:`, JSON.stringify(meta, null, 2));
+    
+    // Validar que el mensaje no esté vacío
+    if (!message || message.trim().length === 0) {
+      console.error(`❌ ERROR: Mensaje parseado está vacío!`);
+      throw new Error("Mensaje vacío después de parsing");
+    }
     
     // 5. Post-procesamiento y validaciones
     validateAndEnhanceMeta(meta, text, conversationContext);
@@ -350,26 +385,77 @@ Un profesional de nuestro equipo se contactará contigo de inmediato.`;
 }
 
 function parseAIResponse(rawOutput, originalText) {
-  const lines = rawOutput.split("\n");
-  let rawJson = "";
-  let messageLines = [];
+  console.log(`🔍 PARSING - Input length: ${rawOutput.length}`);
   
-  // Buscar JSON desde el final
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    if (line.startsWith("{") && line.includes("intent")) {
-      rawJson = line;
-      messageLines = lines.slice(0, i);
-      break;
+  // 1. Remover markdown y limpiar
+  let cleanOutput = rawOutput
+    .replace(/```json\s*/g, '')
+    .replace(/```\s*/g, '')
+    .trim();
+  
+  // 2. Buscar el JSON (debe estar en la última línea o cerca del final)
+  let rawJson = "";
+  let messageText = cleanOutput;
+  
+  // Intentar encontrar JSON usando regex
+  const jsonMatch = cleanOutput.match(/(\{[^}]*"intent"[^}]*\})\s*$/);
+  
+  if (jsonMatch) {
+    rawJson = jsonMatch[1];
+    // Remover el JSON del mensaje
+    messageText = cleanOutput.replace(jsonMatch[0], '').trim();
+    console.log(`✅ JSON encontrado con regex`);
+  } else {
+    // Fallback: buscar línea por línea desde el final
+    const lines = cleanOutput.split("\n");
+    
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      
+      if (line.startsWith("{") && line.includes("intent")) {
+        rawJson = line;
+        messageText = lines.slice(0, i).join("\n").trim();
+        console.log(`✅ JSON encontrado en línea ${i}`);
+        break;
+      }
     }
   }
   
-  // Si no encontró JSON, todo es mensaje
-  if (!rawJson) {
-    messageLines = lines;
-  }
+  // 3. Limpiar el mensaje más agresivamente
+  messageText = messageText
+    .split('\n')
+    .filter(line => {
+      const trimmed = line.trim();
+      // Eliminar líneas que parezcan JSON
+      return trimmed.length > 0 && 
+             !trimmed.startsWith('{') && 
+             !trimmed.includes('"intent"') &&
+             !trimmed.includes('"priority"');
+    })
+    .join('\n')
+    .trim();
   
-  const message = messageLines.join("\n").trim();
+  // 4. Última limpieza: remover cualquier { suelto
+  messageText = messageText.replace(/\s*\{\s*$/g, '').trim();
+  
+  console.log(`📝 Mensaje extraído (${messageText.length} chars): "${messageText.substring(0, 100)}..."`);
+  console.log(`📊 JSON extraído: ${rawJson.substring(0, 100)}...`);
+  
+  // 5. Validar que el mensaje no esté vacío
+  if (!messageText || messageText.length < 10) {
+    console.error(`❌ Mensaje muy corto o vacío después de parsing`);
+    console.error(`Contenido original:`, rawOutput);
+    
+    // Intentar recuperar: tomar todo excepto la última línea con JSON
+    const lines = cleanOutput.split("\n");
+    messageText = lines.slice(0, -1).join("\n").trim();
+    
+    if (!messageText || messageText.length < 10) {
+      // Último recurso: usar mensaje de fallback
+      messageText = "Gracias por tu mensaje. 😊 ¿En qué puedo ayudarte?";
+      console.warn(`⚠️ Usando mensaje de fallback`);
+    }
+  }
   
   // Parsear JSON con fallback robusto
   let meta = {
@@ -381,22 +467,31 @@ function parseAIResponse(rawOutput, originalText) {
     confidence: 0.6
   };
   
-  if (rawJson) {
+  if (rawJson && rawJson.length > 5) {
     try {
       const cleanJson = rawJson
         .replace(/```json\n?/g, '')
         .replace(/```\n?/g, '')
-        .replace(/\n/g, '')
+        .replace(/\n/g, ' ')
         .trim();
       
-      meta = { ...meta, ...JSON.parse(cleanJson) };
+      console.log(`🔧 Intentando parsear JSON: ${cleanJson.substring(0, 150)}...`);
+      
+      const parsed = JSON.parse(cleanJson);
+      meta = { ...meta, ...parsed };
+      
+      console.log(`✅ JSON parseado exitosamente`);
     } catch (e) {
-      console.warn("⚠️ Error parseando JSON, usando extracción manual");
+      console.warn(`⚠️ Error parseando JSON: ${e.message}`);
+      console.warn(`JSON problemático: ${rawJson}`);
       meta = extractMetaManually(rawJson, originalText);
     }
+  } else {
+    console.warn(`⚠️ No se encontró JSON válido, extrayendo manualmente`);
+    meta = extractMetaManually(rawOutput, originalText);
   }
   
-  return { message, meta };
+  return { message: messageText, meta };
 }
 
 function extractMetaManually(rawJson, text) {
