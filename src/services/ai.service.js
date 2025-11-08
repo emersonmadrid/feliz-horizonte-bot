@@ -386,20 +386,20 @@ Un profesional de nuestro equipo se contactará contigo de inmediato.`;
 
 function parseAIResponse(rawOutput, originalText) {
   console.log(`🔍 PARSING - Input length: ${rawOutput.length}`);
-  
+
   // 1. Remover markdown y limpiar
   let cleanOutput = rawOutput
     .replace(/```json\s*/g, '')
     .replace(/```\s*/g, '')
     .trim();
-  
+
   // 2. Buscar el JSON (debe estar en la última línea o cerca del final)
   let rawJson = "";
   let messageText = cleanOutput;
-  
-  // Intentar encontrar JSON usando regex
+
+  // Intentar encontrar JSON usando regex al final del texto
   const jsonMatch = cleanOutput.match(/(\{[^}]*"intent"[^}]*\})\s*$/);
-  
+
   if (jsonMatch) {
     rawJson = jsonMatch[1];
     // Remover el JSON del mensaje
@@ -408,10 +408,10 @@ function parseAIResponse(rawOutput, originalText) {
   } else {
     // Fallback: buscar línea por línea desde el final
     const lines = cleanOutput.split("\n");
-    
+
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim();
-      
+
       if (line.startsWith("{") && line.includes("intent")) {
         rawJson = line;
         messageText = lines.slice(0, i).join("\n").trim();
@@ -420,43 +420,45 @@ function parseAIResponse(rawOutput, originalText) {
       }
     }
   }
-  
+
   // 3. Limpiar el mensaje más agresivamente
   messageText = messageText
     .split('\n')
     .filter(line => {
       const trimmed = line.trim();
       // Eliminar líneas que parezcan JSON
-      return trimmed.length > 0 && 
-             !trimmed.startsWith('{') && 
+      return trimmed.length > 0 &&
+             !trimmed.startsWith('{') &&
              !trimmed.includes('"intent"') &&
              !trimmed.includes('"priority"');
     })
     .join('\n')
     .trim();
-  
-  // 4. Última limpieza: remover cualquier { suelto
-  messageText = messageText.replace(/\s*\{\s*$/g, '').trim();
-  
+
+  // 4. Última limpieza: remover cualquier { o } suelto al final
+  messageText = messageText.replace(/\s*[{}]\s*$/g, '').trim();
+
   console.log(`📝 Mensaje extraído (${messageText.length} chars): "${messageText.substring(0, 100)}..."`);
   console.log(`📊 JSON extraído: ${rawJson.substring(0, 100)}...`);
-  
-  // 5. Validar que el mensaje no esté vacío
-  if (!messageText || messageText.length < 4) {
+
+  // 5. Validar longitud mínima del mensaje (CORRECCIÓN: de 10 a 4)
+  const MIN_MSG_LENGTH = 4;
+
+  if (!messageText || messageText.length < MIN_MSG_LENGTH) {
     console.error(`❌ Mensaje muy corto o vacío después de parsing`);
     console.error(`Contenido original:`, rawOutput);
-    
+
     // Intentar recuperar: tomar todo excepto la última línea con JSON
     const lines = cleanOutput.split("\n");
     messageText = lines.slice(0, -1).join("\n").trim();
-    
-    if (!messageText || messageText.length < 4) {
+
+    if (!messageText || messageText.length < MIN_MSG_LENGTH) {
       // Último recurso: usar mensaje de fallback
       messageText = "Gracias por tu mensaje. 😊 ¿En qué puedo ayudarte?";
       console.warn(`⚠️ Usando mensaje de fallback`);
     }
   }
-  
+
   // Parsear JSON con fallback robusto
   let meta = {
     intent: "info",
@@ -466,7 +468,9 @@ function parseAIResponse(rawOutput, originalText) {
     suggested_actions: [],
     confidence: 0.6
   };
-  
+
+  // ... (El resto de la función es igual)
+
   if (rawJson && rawJson.length > 5) {
     try {
       const cleanJson = rawJson
@@ -474,12 +478,12 @@ function parseAIResponse(rawOutput, originalText) {
         .replace(/```\n?/g, '')
         .replace(/\n/g, ' ')
         .trim();
-      
+
       console.log(`🔧 Intentando parsear JSON: ${cleanJson.substring(0, 150)}...`);
-      
+
       const parsed = JSON.parse(cleanJson);
       meta = { ...meta, ...parsed };
-      
+
       console.log(`✅ JSON parseado exitosamente`);
     } catch (e) {
       console.warn(`⚠️ Error parseando JSON: ${e.message}`);
@@ -490,10 +494,9 @@ function parseAIResponse(rawOutput, originalText) {
     console.warn(`⚠️ No se encontró JSON válido, extrayendo manualmente`);
     meta = extractMetaManually(rawOutput, originalText);
   }
-  
+
   return { message: messageText, meta };
 }
-
 function extractMetaManually(rawJson, text) {
   const meta = {
     intent: "info",
