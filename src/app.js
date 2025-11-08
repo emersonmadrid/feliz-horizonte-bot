@@ -29,7 +29,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const USE_WEBHOOK = VERCEL === "1" && VERCEL_ENV === "production" && PUBLIC_URL;
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !USE_WEBHOOK });
 
-// Configuración webhook (sin cambios)
+// Configuración webhook
 if (USE_WEBHOOK) {
   const baseUrl = PUBLIC_URL.replace(/\/$/, '');
   const webhookUrl = `${baseUrl}/telegram/webhook`;
@@ -65,17 +65,16 @@ const PANEL_TOPIC_ID = Number(TELEGRAM_TOPIC_ID_DEFAULT || 0);
 const phoneToTopic = new Map();
 const topicToPhone = new Map();
 
-// 🆕 NUEVO: Control de conversaciones activas
-const activeConversations = new Map(); // phone -> { lastMessageTime, context, isHumanHandling }
+// Control de conversaciones activas
+const activeConversations = new Map();
 
-// 🆕 NUEVO: Lista negra de palabras ofensivas
+// Lista negra de palabras ofensivas
 const OFFENSIVE_WORDS = [
   'chucha', 'mierda', 'carajo', 'huevón', 'conchatumadre', 'ctm',
   'puta', 'verga', 'cojudo', 'imbécil', 'idiota', 'estúpido',
   'pendejo', 'gil', 'boludo', 'sonso', 'tarado'
 ];
 
-// 🆕 NUEVO: Filtro de mensajes ofensivos
 function containsOffensiveLanguage(text) {
   const lowerText = text.toLowerCase();
   return OFFENSIVE_WORDS.some(word => {
@@ -84,7 +83,7 @@ function containsOffensiveLanguage(text) {
   });
 }
 
-// Palabras de emergencia (sin cambios)
+// Palabras de emergencia
 const emergencyKeywords = [
   "no quiero vivir", "quiero terminar con todo", "me quiero morir", "no vale la pena",
   "quiero hacerme daño", "pensamientos suicidas", "suicid", "matarme", "quitarme la vida"
@@ -92,16 +91,14 @@ const emergencyKeywords = [
 const crisisMessage =
   "Lamento profundamente que estés sintiendo esto... 🆘 Línea 113 (Perú) • Emergencias 116 • Acude al hospital más cercano.";
 
-// 🔧 MEJORADO: Quick answers más inteligentes
+// Quick answers
 function quickAnswers(text, conversationContext = null) {
   const t = (text || "").toLowerCase();
 
-  // Si ya hay contexto de conversación activa, NO usar quick answers
   if (conversationContext?.isHumanHandling || conversationContext?.awaitingScheduling) {
     return null;
   }
 
-  // Solo responder si es una pregunta directa y específica
   if (/(precio|cu[aá]nto cuesta|cuanto|tarifa|costo)/.test(t) &&
     !/(agendar|cita|reservar)/.test(t)) {
     return "Nuestros precios:\n• Terapia psicológica: S/ 140 (50 min, online)\n• Consulta psiquiátrica: S/ 200 (online)\n¿Te gustaría agendar una cita?";
@@ -175,8 +172,7 @@ async function ensureTopicForPhone(phone) {
 }
 
 async function notifyTelegram(title, lines, phone = null) {
-  const body = `<b>${escapeHTML(title)}</b>\n${lines.map(escapeHTML).join("\n")}${phone ? `\n📱 <code>${escapeHTML(phone)}</code>` : ""
-    }`;
+  const body = `<b>${escapeHTML(title)}</b>\n${lines.map(escapeHTML).join("\n")}${phone ? `\n📱 <code>${escapeHTML(phone)}</code>` : ""}`;
   const topicId = phone ? await ensureTopicForPhone(phone) : PANEL_TOPIC_ID;
 
   console.log(`📣 Notificando a Telegram: ${title} | Phone: ${phone || 'N/A'} | Topic: ${topicId}`);
@@ -252,7 +248,7 @@ async function saveMeta({ phone, emergency = false, required_human = false }) {
   }
 }
 
-// Comandos de Telegram (sin cambios en modo)
+// Comandos de Telegram
 let MODE = "smart";
 
 bot.onText(/^\/modo(?:\s+(\w+))?$/i, (msg, m) => {
@@ -280,7 +276,7 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
   }
 });
 
-// 🔧 MEJORADO: TG → WA con filtro de mensajes ofensivos
+// TG → WA con filtro de mensajes ofensivos
 if (!USE_WEBHOOK) {
   bot.on("message", async (msg) => {
     try {
@@ -291,7 +287,6 @@ if (!USE_WEBHOOK) {
       const text = (msg.text || "").trim();
       if (!text || text.startsWith("/")) return;
 
-      // 🆕 NUEVO: Filtro de lenguaje ofensivo
       if (containsOffensiveLanguage(text)) {
         console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO de ${msg.from.username || msg.from.first_name}`);
         await bot.sendMessage(PANEL_CHAT_ID,
@@ -305,7 +300,6 @@ if (!USE_WEBHOOK) {
           }
         );
 
-        // Notificar al admin
         if (ADMIN && String(msg.chat.id) !== ADMIN) {
           await bot.sendMessage(ADMIN,
             `⚠️ <b>ALERTA: Mensaje ofensivo bloqueado</b>\n\n` +
@@ -340,7 +334,6 @@ if (!USE_WEBHOOK) {
         return;
       }
 
-      // 🆕 NUEVO: Marcar que un humano está manejando la conversación
       activeConversations.set(phone, {
         lastMessageTime: Date.now(),
         isHumanHandling: true,
@@ -375,7 +368,6 @@ app.get("/", (_req, res) => {
   });
 });
 
-// Endpoints de admin (sin cambios)
 app.post("/admin/clean-topic", async (req, res) => {
   const { admin_key, phone } = req.body;
 
@@ -433,7 +425,7 @@ app.get("/admin/list-topics", async (req, res) => {
   }
 });
 
-// 🔧 MEJORADO: Webhook de Telegram con filtro de ofensas
+// Webhook de Telegram
 app.post("/telegram/webhook", async (req, res) => {
   try {
     const update = req.body;
@@ -469,7 +461,6 @@ app.post("/telegram/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🆕 NUEVO: Filtro de lenguaje ofensivo en webhook
     if (chatId === PANEL_CHAT_ID && topicId && text) {
       if (containsOffensiveLanguage(text)) {
         console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
@@ -525,7 +516,6 @@ app.post("/telegram/webhook", async (req, res) => {
         console.log(`   Hacia número: ${phone}`);
         console.log(`   Mensaje: "${text}"`);
 
-        // 🆕 NUEVO: Marcar conversación como manejada por humano
         activeConversations.set(phone, {
           lastMessageTime: Date.now(),
           isHumanHandling: true,
@@ -573,7 +563,7 @@ app.get("/webhook/whatsapp", (req, res) => {
   return res.sendStatus(403);
 });
 
-// 🔧 MEJORADO: WhatsApp webhook con mejor manejo de contexto
+// Webhook de WhatsApp (POST - mensajes)
 app.post("/webhook/whatsapp", async (req, res) => {
   try {
     console.log("📥 WHATSAPP WEBHOOK:", JSON.stringify(req.body, null, 2));
@@ -593,7 +583,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     await ensureTopicForPhone(from);
 
-    // 🆕 NUEVO: Obtener contexto de conversación
+    // Obtener contexto de conversación
     const conversationContext = activeConversations.get(from);
     const timeSinceLastMessage = conversationContext
       ? Date.now() - conversationContext.lastMessageTime
@@ -606,7 +596,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       }
     }
 
-    // Emergencia (sin cambios)
+    // Emergencia
     const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
     if (isEmergency) {
       console.log(`🚨 EMERGENCIA detectada de ${from}`);
@@ -623,7 +613,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🔧 MEJORADO: Quick answers con contexto
+    // Quick answers con contexto
     const quick = quickAnswers(text, conversationContext);
     if (quick) {
       console.log(`⚡ Quick answer para ${from}`);
@@ -640,7 +630,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // 🆕 NUEVO: Si un humano está manejando, NO responder con IA
+    // Si un humano está manejando, NO responder con IA
     if (conversationContext?.isHumanHandling && timeSinceLastMessage < 15 * 60 * 1000) {
       console.log(`👤 Conversación manejada por humano, solo notificando...`);
       await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [`💬 "${text}"`], from);
@@ -657,9 +647,13 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const { message: aiMessage, meta } = await generateAIReply({
       text,
       conversationContext,
-      phone: from  // 🆕 Pasar el teléfono para historial
+      phone: from
     });
 
+    // Agregar link de Calendly solo para terapia
+    let finalMessage = aiMessage;
+
+    // Solo enviar link automático si es TERAPIA
     if (meta?.intent === 'agendar' && meta?.service === 'therapy') {
       const calendlyUrl = process.env.CALENDLY_THERAPY_URL;
 
@@ -672,9 +666,10 @@ app.post("/webhook/whatsapp", async (req, res) => {
     // Si es PSIQUIATRÍA, derivar a humano (no enviar link)
     if (meta?.intent === 'agendar' && meta?.service === 'psychiatry') {
       finalMessage += `\n\n👤 Para coordinar tu consulta psiquiátrica, un miembro de nuestro equipo te contactará en breve para confirmar disponibilidad.`;
-      meta.notify_human = true; // Forzar derivación a humano
+      meta.notify_human = true;
       console.log(`👤 Consulta psiquiátrica detectada - derivando a humano`);
     }
+
     console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
 
     // Notifica a Telegram
@@ -688,7 +683,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     await saveMeta({ phone: from, required_human: !shouldAutoReply });
 
-    // 🆕 NUEVO: Actualizar contexto de conversación
+    // Actualizar contexto de conversación
     const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
 
     activeConversations.set(from, {
@@ -699,214 +694,82 @@ app.post("/webhook/whatsapp", async (req, res) => {
       context: text
     });
 
-
-    // 🔧 MEJORADO: WhatsApp webhook con mejor manejo de contexto
-    app.post("/webhook/whatsapp", async (req, res) => {
-      try {
-        console.log("📥 WHATSAPP WEBHOOK:", JSON.stringify(req.body, null, 2));
-
-        const change = req.body?.entry?.[0]?.changes?.[0]?.value;
-        const msg = change?.messages?.[0];
-
-        if (!msg) {
-          console.log("⚠️ WhatsApp webhook sin mensaje");
-          return res.sendStatus(200);
-        }
-
-        const from = msg.from;
-        const text = (msg.text?.body || "").trim();
-
-        console.log(`💬 WhatsApp de ${from}: "${text}"`);
-
-        await ensureTopicForPhone(from);
-
-        // 🆕 NUEVO: Obtener contexto de conversación
-        const conversationContext = activeConversations.get(from);
-        const timeSinceLastMessage = conversationContext
-          ? Date.now() - conversationContext.lastMessageTime
-          : Infinity;
-
-        // Si pasaron más de 15 minutos, resetear el flag de humano
-        if (timeSinceLastMessage > 15 * 60 * 1000) {
-          if (conversationContext) {
-            conversationContext.isHumanHandling = false;
+    if (shouldAutoReply) {
+      console.log(`🤖 Auto-respondiendo a ${from}`);
+      await sendWhatsAppText(from, finalMessage);
+    } else {
+      console.log(`👤 Requiere respuesta humana para ${from}`);
+      const topicId = await ensureTopicForPhone(from);
+      if (topicId && PANEL_CHAT_ID) {
+        await bot.sendMessage(PANEL_CHAT_ID,
+          `⚠️ <b>REQUIERE ATENCIÓN HUMANA</b>\n\n` +
+          `El cliente necesita ayuda personalizada.\n` +
+          `✍️ Escribe tu respuesta en este tema.\n\n` +
+          `<i>Contexto: ${meta?.intent || 'general'} (prioridad: ${meta?.priority || 'low'})</i>`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: topicId,
           }
-        }
-
-        // Emergencia (sin cambios)
-        const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
-        if (isEmergency) {
-          console.log(`🚨 EMERGENCIA detectada de ${from}`);
-          await sendWhatsAppText(from, crisisMessage);
-          await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
-          await saveMeta({ phone: from, emergency: true, required_human: true });
-
-          activeConversations.set(from, {
-            lastMessageTime: Date.now(),
-            isHumanHandling: true,
-            awaitingScheduling: false
-          });
-
-          return res.sendStatus(200);
-        }
-
-        // 🔧 MEJORADO: Quick answers con contexto
-        const quick = quickAnswers(text, conversationContext);
-        if (quick) {
-          console.log(`⚡ Quick answer para ${from}`);
-          await sendWhatsAppText(from, quick);
-          await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
-          await saveMeta({ phone: from });
-
-          activeConversations.set(from, {
-            lastMessageTime: Date.now(),
-            isHumanHandling: false,
-            awaitingScheduling: false
-          });
-
-          return res.sendStatus(200);
-        }
-
-        // 🆕 NUEVO: Si un humano está manejando, NO responder con IA
-        if (conversationContext?.isHumanHandling && timeSinceLastMessage < 15 * 60 * 1000) {
-          console.log(`👤 Conversación manejada por humano, solo notificando...`);
-          await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [`💬 "${text}"`], from);
-          await saveMeta({ phone: from, required_human: true });
-
-          // Actualizar timestamp
-          conversationContext.lastMessageTime = Date.now();
-
-          return res.sendStatus(200);
-        }
-
-        // IA (Gemini)
-        console.log(`🤖 Consultando IA para mensaje de ${from}`);
-        const { message: aiMessage, meta } = await generateAIReply({
-          text,
-          conversationContext,
-          phone: from  // 🆕 Pasar el teléfono para historial
-        });
-
-        // 🆕 NUEVO: Agregar link de Calendly solo para terapia
-        let finalMessage = aiMessage;
-
-        // Solo enviar link automático si es TERAPIA
-        if (meta?.intent === 'agendar' && meta?.service === 'therapy') {
-          const calendlyUrl = process.env.CALENDLY_THERAPY_URL;
-
-          if (calendlyUrl) {
-            finalMessage += `\n\n📅 Agenda aquí tu cita de terapia psicológica:\n${calendlyUrl}`;
-            console.log(`📅 Link de Calendly agregado para terapia`);
-          }
-        }
-
-        // Si es PSIQUIATRÍA, derivar a humano (no enviar link)
-        if (meta?.intent === 'agendar' && meta?.service === 'psychiatry') {
-          finalMessage += `\n\n👤 Para coordinar tu consulta psiquiátrica, un miembro de nuestro equipo te contactará en breve para confirmar disponibilidad.`;
-          meta.notify_human = true; // Forzar derivación a humano
-          console.log(`👤 Consulta psiquiátrica detectada - derivando a humano`);
-        }
-
-        console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
-
-        // Notifica a Telegram
-        await notifyTelegram("🔔 NUEVO MENSAJE", [
-          `💬 "${text}"`,
-          `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
-        ], from);
-
-        // Decide si auto-responder
-        const shouldAutoReply = !meta?.notify_human;
-
-        await saveMeta({ phone: from, required_human: !shouldAutoReply });
-
-        // 🆕 NUEVO: Actualizar contexto de conversación
-        const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
-
-        activeConversations.set(from, {
-          lastMessageTime: Date.now(),
-          isHumanHandling: !shouldAutoReply,
-          awaitingScheduling: isSchedulingIntent,
-          lastIntent: meta?.intent,
-          context: text
-        });
-
-        if (shouldAutoReply) {
-          console.log(`🤖 Auto-respondiendo a ${from}`);
-          await sendWhatsAppText(from, finalMessage);  // ← Usar finalMessage aquí
-        } else {
-          console.log(`👤 Requiere respuesta humana para ${from}`);
-          const topicId = await ensureTopicForPhone(from);
-          if (topicId && PANEL_CHAT_ID) {
-            await bot.sendMessage(PANEL_CHAT_ID,
-              `⚠️ <b>REQUIERE ATENCIÓN HUMANA</b>\n\n` +
-              `El cliente necesita ayuda personalizada.\n` +
-              `✍️ Escribe tu respuesta en este tema.\n\n` +
-              `<i>Contexto: ${meta?.intent || 'general'} (prioridad: ${meta?.priority || 'low'})</i>`,
-              {
-                parse_mode: "HTML",
-                message_thread_id: topicId,
-              }
-            );
-          } else if (ADMIN) {
-            await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
-          }
-        }
-
-        res.sendStatus(200);
-      } catch (e) {
-        console.error("❌ Webhook error:", e?.response?.data || e.message);
-        res.sendStatus(200);
+        );
+      } else if (ADMIN) {
+        await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
       }
-    });
-
-    // 🆕 NUEVO: Endpoint para resetear conversación (útil para testing)
-    app.post("/admin/reset-conversation", async (req, res) => {
-      const { admin_key, phone } = req.body;
-
-      if (admin_key !== process.env.ADMIN_SETUP_KEY) {
-        return res.status(403).json({ error: "No autorizado" });
-      }
-
-      activeConversations.delete(phone);
-
-      return res.json({
-        success: true,
-        message: `Conversación para ${phone} reseteada`
-      });
-    });
-
-    // 🆕 NUEVO: Endpoint para ver conversaciones activas
-    app.get("/admin/active-conversations", async (req, res) => {
-      const { admin_key } = req.query;
-
-      if (admin_key !== process.env.ADMIN_SETUP_KEY) {
-        return res.status(403).json({ error: "No autorizado" });
-      }
-
-      const conversations = [];
-      const now = Date.now();
-
-      for (const [phone, context] of activeConversations.entries()) {
-        conversations.push({
-          phone,
-          isHumanHandling: context.isHumanHandling,
-          awaitingScheduling: context.awaitingScheduling,
-          lastIntent: context.lastIntent,
-          minutesSinceLastMessage: Math.floor((now - context.lastMessageTime) / 60000)
-        });
-      }
-
-      return res.json({
-        total: conversations.length,
-        conversations
-      });
-    });
-
-    // Export para Vercel / local
-    if (VERCEL !== "1") {
-      const port = process.env.PORT || 3000;
-      app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
     }
 
-    export default (req, res) => app(req, res)
+    res.sendStatus(200);
+  } catch (e) {
+    console.error("❌ Webhook error:", e?.response?.data || e.message);
+    res.sendStatus(200);
+  }
+});
+
+// Endpoint para resetear conversación
+app.post("/admin/reset-conversation", async (req, res) => {
+  const { admin_key, phone } = req.body;
+
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  activeConversations.delete(phone);
+
+  return res.json({
+    success: true,
+    message: `Conversación para ${phone} reseteada`
+  });
+});
+
+// Endpoint para ver conversaciones activas
+app.get("/admin/active-conversations", async (req, res) => {
+  const { admin_key } = req.query;
+
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  const conversations = [];
+  const now = Date.now();
+
+  for (const [phone, context] of activeConversations.entries()) {
+    conversations.push({
+      phone,
+      isHumanHandling: context.isHumanHandling,
+      awaitingScheduling: context.awaitingScheduling,
+      lastIntent: context.lastIntent,
+      minutesSinceLastMessage: Math.floor((now - context.lastMessageTime) / 60000)
+    });
+  }
+
+  return res.json({
+    total: conversations.length,
+    conversations
+  });
+});
+
+// Export para Vercel / local
+if (VERCEL !== "1") {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
+}
+
+export default (req, res) => app(req, res);
