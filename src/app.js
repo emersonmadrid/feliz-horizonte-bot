@@ -700,82 +700,213 @@ app.post("/webhook/whatsapp", async (req, res) => {
     });
 
 
-    if (shouldAutoReply) {
-      console.log(`🤖 Auto-respondiendo a ${from}`);
-      await sendWhatsAppText(from, finalMessage);
-    } else {
-      console.log(`👤 Requiere respuesta humana para ${from}`);
-      const topicId = await ensureTopicForPhone(from);
-      if (topicId && PANEL_CHAT_ID) {
-        await bot.sendMessage(PANEL_CHAT_ID,
-          `⚠️ <b>REQUIERE ATENCIÓN HUMANA</b>\n\n` +
-          `El cliente necesita ayuda personalizada.\n` +
-          `✍️ Escribe tu respuesta en este tema.\n\n` +
-          `<i>Contexto: ${meta?.intent || 'general'} (prioridad: ${meta?.priority || 'low'})</i>`,
-          {
-            parse_mode: "HTML",
-            message_thread_id: topicId,
+    // 🔧 MEJORADO: WhatsApp webhook con mejor manejo de contexto
+    app.post("/webhook/whatsapp", async (req, res) => {
+      try {
+        console.log("📥 WHATSAPP WEBHOOK:", JSON.stringify(req.body, null, 2));
+
+        const change = req.body?.entry?.[0]?.changes?.[0]?.value;
+        const msg = change?.messages?.[0];
+
+        if (!msg) {
+          console.log("⚠️ WhatsApp webhook sin mensaje");
+          return res.sendStatus(200);
+        }
+
+        const from = msg.from;
+        const text = (msg.text?.body || "").trim();
+
+        console.log(`💬 WhatsApp de ${from}: "${text}"`);
+
+        await ensureTopicForPhone(from);
+
+        // 🆕 NUEVO: Obtener contexto de conversación
+        const conversationContext = activeConversations.get(from);
+        const timeSinceLastMessage = conversationContext
+          ? Date.now() - conversationContext.lastMessageTime
+          : Infinity;
+
+        // Si pasaron más de 15 minutos, resetear el flag de humano
+        if (timeSinceLastMessage > 15 * 60 * 1000) {
+          if (conversationContext) {
+            conversationContext.isHumanHandling = false;
           }
-        );
-      } else if (ADMIN) {
-        await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
+        }
+
+        // Emergencia (sin cambios)
+        const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
+        if (isEmergency) {
+          console.log(`🚨 EMERGENCIA detectada de ${from}`);
+          await sendWhatsAppText(from, crisisMessage);
+          await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
+          await saveMeta({ phone: from, emergency: true, required_human: true });
+
+          activeConversations.set(from, {
+            lastMessageTime: Date.now(),
+            isHumanHandling: true,
+            awaitingScheduling: false
+          });
+
+          return res.sendStatus(200);
+        }
+
+        // 🔧 MEJORADO: Quick answers con contexto
+        const quick = quickAnswers(text, conversationContext);
+        if (quick) {
+          console.log(`⚡ Quick answer para ${from}`);
+          await sendWhatsAppText(from, quick);
+          await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
+          await saveMeta({ phone: from });
+
+          activeConversations.set(from, {
+            lastMessageTime: Date.now(),
+            isHumanHandling: false,
+            awaitingScheduling: false
+          });
+
+          return res.sendStatus(200);
+        }
+
+        // 🆕 NUEVO: Si un humano está manejando, NO responder con IA
+        if (conversationContext?.isHumanHandling && timeSinceLastMessage < 15 * 60 * 1000) {
+          console.log(`👤 Conversación manejada por humano, solo notificando...`);
+          await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [`💬 "${text}"`], from);
+          await saveMeta({ phone: from, required_human: true });
+
+          // Actualizar timestamp
+          conversationContext.lastMessageTime = Date.now();
+
+          return res.sendStatus(200);
+        }
+
+        // IA (Gemini)
+        console.log(`🤖 Consultando IA para mensaje de ${from}`);
+        const { message: aiMessage, meta } = await generateAIReply({
+          text,
+          conversationContext,
+          phone: from  // 🆕 Pasar el teléfono para historial
+        });
+
+        // 🆕 NUEVO: Agregar link de Calendly solo para terapia
+        let finalMessage = aiMessage;
+
+        // Solo enviar link automático si es TERAPIA
+        if (meta?.intent === 'agendar' && meta?.service === 'therapy') {
+          const calendlyUrl = process.env.CALENDLY_THERAPY_URL;
+
+          if (calendlyUrl) {
+            finalMessage += `\n\n📅 Agenda aquí tu cita de terapia psicológica:\n${calendlyUrl}`;
+            console.log(`📅 Link de Calendly agregado para terapia`);
+          }
+        }
+
+        // Si es PSIQUIATRÍA, derivar a humano (no enviar link)
+        if (meta?.intent === 'agendar' && meta?.service === 'psychiatry') {
+          finalMessage += `\n\n👤 Para coordinar tu consulta psiquiátrica, un miembro de nuestro equipo te contactará en breve para confirmar disponibilidad.`;
+          meta.notify_human = true; // Forzar derivación a humano
+          console.log(`👤 Consulta psiquiátrica detectada - derivando a humano`);
+        }
+
+        console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
+
+        // Notifica a Telegram
+        await notifyTelegram("🔔 NUEVO MENSAJE", [
+          `💬 "${text}"`,
+          `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
+        ], from);
+
+        // Decide si auto-responder
+        const shouldAutoReply = !meta?.notify_human;
+
+        await saveMeta({ phone: from, required_human: !shouldAutoReply });
+
+        // 🆕 NUEVO: Actualizar contexto de conversación
+        const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
+
+        activeConversations.set(from, {
+          lastMessageTime: Date.now(),
+          isHumanHandling: !shouldAutoReply,
+          awaitingScheduling: isSchedulingIntent,
+          lastIntent: meta?.intent,
+          context: text
+        });
+
+        if (shouldAutoReply) {
+          console.log(`🤖 Auto-respondiendo a ${from}`);
+          await sendWhatsAppText(from, finalMessage);  // ← Usar finalMessage aquí
+        } else {
+          console.log(`👤 Requiere respuesta humana para ${from}`);
+          const topicId = await ensureTopicForPhone(from);
+          if (topicId && PANEL_CHAT_ID) {
+            await bot.sendMessage(PANEL_CHAT_ID,
+              `⚠️ <b>REQUIERE ATENCIÓN HUMANA</b>\n\n` +
+              `El cliente necesita ayuda personalizada.\n` +
+              `✍️ Escribe tu respuesta en este tema.\n\n` +
+              `<i>Contexto: ${meta?.intent || 'general'} (prioridad: ${meta?.priority || 'low'})</i>`,
+              {
+                parse_mode: "HTML",
+                message_thread_id: topicId,
+              }
+            );
+          } else if (ADMIN) {
+            await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
+          }
+        }
+
+        res.sendStatus(200);
+      } catch (e) {
+        console.error("❌ Webhook error:", e?.response?.data || e.message);
+        res.sendStatus(200);
       }
+    });
+
+    // 🆕 NUEVO: Endpoint para resetear conversación (útil para testing)
+    app.post("/admin/reset-conversation", async (req, res) => {
+      const { admin_key, phone } = req.body;
+
+      if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      activeConversations.delete(phone);
+
+      return res.json({
+        success: true,
+        message: `Conversación para ${phone} reseteada`
+      });
+    });
+
+    // 🆕 NUEVO: Endpoint para ver conversaciones activas
+    app.get("/admin/active-conversations", async (req, res) => {
+      const { admin_key } = req.query;
+
+      if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      const conversations = [];
+      const now = Date.now();
+
+      for (const [phone, context] of activeConversations.entries()) {
+        conversations.push({
+          phone,
+          isHumanHandling: context.isHumanHandling,
+          awaitingScheduling: context.awaitingScheduling,
+          lastIntent: context.lastIntent,
+          minutesSinceLastMessage: Math.floor((now - context.lastMessageTime) / 60000)
+        });
+      }
+
+      return res.json({
+        total: conversations.length,
+        conversations
+      });
+    });
+
+    // Export para Vercel / local
+    if (VERCEL !== "1") {
+      const port = process.env.PORT || 3000;
+      app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
     }
 
-    res.sendStatus(200);
-  } catch (e) {
-    console.error("❌ Webhook error:", e?.response?.data || e.message);
-    res.sendStatus(200);
-  }
-});
-
-// 🆕 NUEVO: Endpoint para resetear conversación (útil para testing)
-app.post("/admin/reset-conversation", async (req, res) => {
-  const { admin_key, phone } = req.body;
-
-  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
-    return res.status(403).json({ error: "No autorizado" });
-  }
-
-  activeConversations.delete(phone);
-
-  return res.json({
-    success: true,
-    message: `Conversación para ${phone} reseteada`
-  });
-});
-
-// 🆕 NUEVO: Endpoint para ver conversaciones activas
-app.get("/admin/active-conversations", async (req, res) => {
-  const { admin_key } = req.query;
-
-  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
-    return res.status(403).json({ error: "No autorizado" });
-  }
-
-  const conversations = [];
-  const now = Date.now();
-
-  for (const [phone, context] of activeConversations.entries()) {
-    conversations.push({
-      phone,
-      isHumanHandling: context.isHumanHandling,
-      awaitingScheduling: context.awaitingScheduling,
-      lastIntent: context.lastIntent,
-      minutesSinceLastMessage: Math.floor((now - context.lastMessageTime) / 60000)
-    });
-  }
-
-  return res.json({
-    total: conversations.length,
-    conversations
-  });
-});
-
-// Export para Vercel / local
-if (VERCEL !== "1") {
-  const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
-}
-
-export default (req, res) => app(req, res)
+    export default (req, res) => app(req, res)
