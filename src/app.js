@@ -10,61 +10,6 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-function sanitizeWhatsAppMessage(text) {
-  if (!text || typeof text !== 'string') {
-    console.error("❌ Mensaje inválido:", text);
-    return null;
-  }
-  
-  let cleaned = text.trim();
-  
-  // 1. Remover bloques JSON completos
-  cleaned = cleaned.replace(/\{[^}]*"intent"[^}]*\}/g, '');
-  
-  // 2. Remover líneas que contengan JSON
-  cleaned = cleaned.split('\n')
-    .filter(line => {
-      const trimmed = line.trim();
-      return trimmed.length > 0 && 
-             !trimmed.startsWith('{') && 
-             !trimmed.includes('"intent"') &&
-             !trimmed.includes('"priority"') &&
-             !trimmed.includes('"notify_human"');
-    })
-    .join('\n')
-    .trim();
-  
-  // 3. Remover markdown code blocks
-  cleaned = cleaned.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-  
-  // 4. Remover { o } sueltos al final
-  cleaned = cleaned.replace(/\s*[{}]\s*$/g, '').trim();
-  
-  // 5. Validar que no esté vacío
-  if (cleaned.length === 0) {
-    console.error("❌ Mensaje quedó vacío después de limpiar");
-    console.error("❌ Texto original:", text);
-    return null;
-  }
-  
-  // 6. Validar longitud mínima razonable
-  if (cleaned.length < 5) {
-    console.error("❌ Mensaje muy corto:", cleaned);
-    return null;
-  }
-  
-  // 7. Validar longitud máxima (WhatsApp permite hasta 4096 caracteres)
-  if (cleaned.length > 4096) {
-    console.warn("⚠️ Mensaje muy largo, truncando...");
-    cleaned = cleaned.substring(0, 4093) + "...";
-  }
-  
-  console.log(`✅ Mensaje sanitizado (${cleaned.length} chars): "${cleaned.substring(0, 100)}..."`);
-  
-  return cleaned;
-}
-
-
 const {
   PUBLIC_URL,
   TELEGRAM_BOT_TOKEN,
@@ -173,69 +118,18 @@ function quickAnswers(text, conversationContext = null) {
 }
 
 async function sendWhatsAppText(to, text) {
-  // 🆕 SANITIZAR MENSAJE
-  const cleanText = sanitizeWhatsAppMessage(text);
-  
-  if (!cleanText) {
-    console.error(`❌ No se puede enviar mensaje vacío a ${to}`);
-    console.error(`Texto original:`, text);
-    return false;
-  }
-  
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`📱 [SIMULADO] WhatsApp → ${to}: ${cleanText.substring(0, 100)}...`);
-    return true;
+    console.log(`📱 [SIMULADO] WhatsApp → ${to}: ${text}`);
+    return;
   }
-  
   const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-  
-  console.log(`📤 Enviando WhatsApp a ${to}`);
-  console.log(`📝 Contenido: "${cleanText.substring(0, 150)}..."`);
-  
-  try {
-    const response = await axios.post(
-      url,
-      { 
-        messaging_product: "whatsapp", 
-        to, 
-        type: "text", 
-        text: { body: cleanText } 
-      },
-      { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
-    );
-    
-    console.log(`✅ WhatsApp enviado exitosamente a ${to}`);
-    return true;
-    
-  } catch (error) {
-    console.error(`❌ Error enviando WhatsApp a ${to}:`);
-    console.error(`Status: ${error.response?.status}`);
-    console.error(`Error:`, error.response?.data || error.message);
-    
-    // Si el error es por contenido vacío, intentar con mensaje genérico
-    if (error.response?.data?.error?.code === 100) {
-      console.log(`🔄 Reintentando con mensaje de respaldo...`);
-      try {
-        await axios.post(
-          url,
-          { 
-            messaging_product: "whatsapp", 
-            to, 
-            type: "text", 
-            text: { body: "Gracias por escribirnos. Un miembro de nuestro equipo te atenderá en breve. 😊" } 
-          },
-          { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
-        );
-        console.log(`✅ Mensaje de respaldo enviado`);
-        return true;
-      } catch (retryError) {
-        console.error(`❌ Error en reintento:`, retryError.response?.data || retryError.message);
-        return false;
-      }
-    }
-    
-    return false;
-  }
+  console.log(`📤 Enviando WhatsApp a ${to}: ${text.substring(0, 50)}...`);
+  await axios.post(
+    url,
+    { messaging_product: "whatsapp", to, type: "text", text: { body: text } },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+  console.log(`✅ WhatsApp enviado exitosamente a ${to}`);
 }
 
 function escapeHTML(s = "") {
@@ -749,9 +643,6 @@ app.post("/webhook/whatsapp", async (req, res) => {
     }
 
     // IA (Gemini)
-
-    //emmh i
-    // IA (tu código existente)
     console.log(`🤖 Consultando IA para mensaje de ${from}`);
     const { message: aiMessage, meta } = await generateAIReply({
       text,
@@ -759,43 +650,20 @@ app.post("/webhook/whatsapp", async (req, res) => {
       phone: from
     });
 
-    // 🆕 VALIDAR que el mensaje de IA no esté vacío
-    if (!aiMessage || aiMessage.trim().length === 0) {
-      console.error(`❌ IA devolvió mensaje vacío`);
-      console.error(`Respuesta original:`, aiMessage);
-      
-      // Usar mensaje de respaldo
-      const fallbackMessage = "Gracias por tu mensaje. Un miembro de nuestro equipo te atenderá en breve. 😊";
-      
-      await sendWhatsAppText(from, fallbackMessage);
-      await notifyTelegram("⚠️ IA devolvió mensaje vacío", [
-        `💬 "${text}"`,
-        `🤖 Se usó mensaje de respaldo`
-      ], from);
-      
-      meta.notify_human = true;
-      meta.priority = 'high';
-      
-      activeConversations.set(from, {
-        lastMessageTime: Date.now(),
-        isHumanHandling: true,
-        awaitingScheduling: false
-      });
-      
-      await saveMeta({ phone: from, required_human: true });
-      return res.sendStatus(200);
-    }
-
+    // Agregar link de Calendly solo para terapia
     let finalMessage = aiMessage;
 
+    // Solo enviar link automático si es TERAPIA
     if (meta?.intent === 'agendar' && meta?.service === 'therapy') {
       const calendlyUrl = process.env.CALENDLY_THERAPY_URL;
+
       if (calendlyUrl) {
         finalMessage += `\n\n📅 Agenda aquí tu cita de terapia psicológica:\n${calendlyUrl}`;
         console.log(`📅 Link de Calendly agregado para terapia`);
       }
     }
 
+    // Si es PSIQUIATRÍA, derivar a humano (no enviar link)
     if (meta?.intent === 'agendar' && meta?.service === 'psychiatry') {
       finalMessage += `\n\n👤 Para coordinar tu consulta psiquiátrica, un miembro de nuestro equipo te contactará en breve para confirmar disponibilidad.`;
       meta.notify_human = true;
@@ -804,14 +672,18 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
 
+    // Notifica a Telegram
     await notifyTelegram("🔔 NUEVO MENSAJE", [
       `💬 "${text}"`,
       `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
     ], from);
 
+    // Decide si auto-responder
     const shouldAutoReply = !meta?.notify_human;
+
     await saveMeta({ phone: from, required_human: !shouldAutoReply });
 
+    // Actualizar contexto de conversación
     const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
 
     activeConversations.set(from, {
@@ -824,19 +696,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     if (shouldAutoReply) {
       console.log(`🤖 Auto-respondiendo a ${from}`);
-      console.log(`📝 Mensaje final a enviar: "${finalMessage.substring(0, 200)}..."`);
-      
-      const sent = await sendWhatsAppText(from, finalMessage);
-      
-      if (!sent) {
-        console.error(`❌ Fallo al enviar mensaje, derivando a humano`);
-        meta.notify_human = true;
-        activeConversations.set(from, {
-          lastMessageTime: Date.now(),
-          isHumanHandling: true,
-          awaitingScheduling: false
-        });
-      }
+      await sendWhatsAppText(from, finalMessage);
     } else {
       console.log(`👤 Requiere respuesta humana para ${from}`);
       const topicId = await ensureTopicForPhone(from);
@@ -855,7 +715,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
         await bot.sendMessage(ADMIN, `✍️ Responde con:\n/enviar ${from} | (tu respuesta)`);
       }
     }
-//emmh f
+
     res.sendStatus(200);
   } catch (e) {
     console.error("❌ Webhook error:", e?.response?.data || e.message);
