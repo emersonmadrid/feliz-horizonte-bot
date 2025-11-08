@@ -145,8 +145,10 @@ NO PIDAS NI GUARDES DATOS SENSIBLES por chat.
 // Historial de conversaciones por teléfono
 const conversationHistory = new Map();
 
+// src/services/ai.service.js
+
 export async function generateAIReply({ text, conversationContext = null, phone = null }) {
-  // Construir contexto conversacional
+  // Construir contexto conversacional... (se mantiene tu lógica de contexto)
   let contextPrompt = "";
   
   if (phone && conversationHistory.has(phone)) {
@@ -155,10 +157,10 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     
     if (recentMessages.length > 0) {
       contextPrompt = "\n\nCONTEXTO DE CONVERSACIÓN PREVIA:\n";
-      recentMessages.forEach((msg, idx) => {
+      recentMessages.forEach((msg) => {
         contextPrompt += `${msg.role === 'user' ? 'Cliente' : 'Tú'}: "${msg.text}"\n`;
       });
-      contextPrompt += "\nIMPORTANTE: NO repitas lo que ya dijiste. Si el cliente ya eligió el servicio, envía el link directamente.\n";
+      contextPrompt += "\nIMPORTANTE: NO repitas lo que ya dijiste. Si el cliente ya eligió el servicio, AVANZA hacia el agendamiento.\n";
     }
   }
   
@@ -181,23 +183,29 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     const result = await model.generateContent({
       contents: [{ parts: [{ text: input }] }],
     });
-    const out = result.response.text().trim();
+    
+    // Limpieza inicial: remover bloques de código
+    let out = result.response.text().trim();
+    out = out.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
 
     // Separar respuesta y JSON
     const lines = out.split("\n");
     let rawJson = lines[lines.length - 1];
     
-    // Buscar el JSON
+    // Buscar el JSON y eliminarlo de las líneas del mensaje
+    let jsonFound = false;
     for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].trim().startsWith("{")) {
+      if (lines[i].trim().startsWith("{") && lines[i].includes('"intent"')) {
         rawJson = lines[i].trim();
         lines.splice(i, 1);
+        jsonFound = true;
         break;
       }
     }
     
-    const message = lines.join("\n").trim();
+    let message = lines.join("\n").trim();
 
+    // 1. Parsear JSON con fallback
     let meta = {
       intent: "info",
       priority: "low",
@@ -207,14 +215,13 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       confidence: 0.6,
     };
     
+    // ... (Tu lógica de parseo de JSON se mantiene aquí para asegurar la extracción)
     try {
       const cleanJson = rawJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       meta = JSON.parse(cleanJson);
     } catch (parseError) {
       console.error("❌ Error parseando JSON de IA:", parseError.message);
-      console.error("JSON recibido:", rawJson);
-      
-      // Intentar extraer manualmente
+      // Fallback manual de extracción de meta
       try {
         const intentMatch = rawJson.match(/"intent"\s*:\s*"([^"]+)"/);
         const priorityMatch = rawJson.match(/"priority"\s*:\s*"([^"]+)"/);
@@ -225,12 +232,48 @@ export async function generateAIReply({ text, conversationContext = null, phone 
         if (priorityMatch) meta.priority = priorityMatch[1];
         if (notifyMatch) meta.notify_human = notifyMatch[1] === 'true';
         if (serviceMatch) meta.service = serviceMatch[1] === 'null' ? null : serviceMatch[1];
-      } catch {
-        // Usar valores por defecto
+      } catch (e) {
+        console.error("❌ Error en extracción manual de meta:", e.message);
       }
     }
 
-    // 🆕 NUEVO: Detección manual de servicio si la IA falló
+    // 2. CORRECCIÓN CRÍTICA: Fallback de mensaje si la IA solo envió JSON
+    const MIN_MESSAGE_LENGTH = 4;
+    if (!message || message.length < MIN_MESSAGE_LENGTH) {
+      console.warn(`⚠️ Mensaje de IA vacío o muy corto (${message.length} chars). Generando fallback conversacional.`);
+      
+      switch (meta.intent) {
+        case 'agendar':
+          message = "¡Perfecto! Un momento por favor, te envío la información para agendar tu cita. 😊";
+          break;
+        case 'precios':
+        case 'servicios':
+          message = "Claro, con gusto te doy la información. ¿Cuál de nuestros servicios te interesa? 💙";
+          break;
+        case 'horarios':
+          message = "Nuestros horarios son L-V 9AM-8PM y Sáb 9AM-2PM. ¿Te gustaría agendar una cita? ✨";
+          break;
+        case 'despedida':
+          message = "Gracias por contactarnos. ¡Que tengas un excelente día! 😊";
+          break;
+        case 'saludo':
+        case 'info':
+        default:
+          message = "Hola, soy el asistente de Feliz Horizonte. ¿En qué puedo ayudarte hoy? 😊";
+          break;
+      }
+      
+      // Si el mensaje estaba vacío, forzamos un intent básico
+      if (meta.intent === 'saludo' || meta.intent === 'despedida' || meta.intent === 'error') {
+        meta.intent = 'info';
+        meta.confidence = 0.5;
+      }
+    }
+    
+    // ... (Tu lógica de detección manual y overrides se mantiene)
+    
+    // Detección manual de servicio si la IA falló
+    // ... [Se mantiene tu lógica de override]
     if (!meta.service || meta.service === 'null') {
       const textLower = text.toLowerCase();
       if (/(psicolog[íi]a|psic[óo]log[oa]|terapia|terapeuta)/i.test(textLower)) {
@@ -242,24 +285,10 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       }
     }
 
-    // 🆕 NUEVO: Si detecta "agendar" + "therapy", NO derivar a humano
+    // Si detecta "agendar" + "therapy", NO derivar a humano
     if (meta.intent === 'agendar' && meta.service === 'therapy') {
       meta.notify_human = false;
       console.log(`🔧 Override: agendamiento de terapia = auto-respuesta`);
-    }
-
-    // Guardar en historial
-    if (phone) {
-      if (!conversationHistory.has(phone)) {
-        conversationHistory.set(phone, []);
-      }
-      const history = conversationHistory.get(phone);
-      history.push({ role: 'user', text, timestamp: Date.now() });
-      history.push({ role: 'assistant', text: message, timestamp: Date.now() });
-      
-      if (history.length > 10) {
-        history.splice(0, history.length - 10);
-      }
     }
 
     // Lógica de frustración
@@ -285,11 +314,26 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       console.log(`⚠️ Solicitud urgente detectada: "${text}"`);
     }
 
+    // Guardar en historial... (se mantiene tu lógica de historial)
+    if (phone) {
+      if (!conversationHistory.has(phone)) {
+        conversationHistory.set(phone, []);
+      }
+      const history = conversationHistory.get(phone);
+      history.push({ role: 'user', text, timestamp: Date.now() });
+      history.push({ role: 'assistant', text: message, timestamp: Date.now() });
+      
+      if (history.length > 10) {
+        history.splice(0, history.length - 10);
+      }
+    }
+
     console.log(`📊 Meta final:`, JSON.stringify(meta));
 
     return { message, meta };
   } catch (e) {
     console.error("❌ AI error:", e?.message);
+    // [Tu fallback por error de conexión se mantiene]
     return {
       message:
         "Gracias por escribirnos 😊 En este momento estoy teniendo dificultades técnicas. Un miembro de mi equipo te atenderá en breve.",
