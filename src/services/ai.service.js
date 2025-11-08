@@ -442,7 +442,7 @@ function parseAIResponse(rawOutput, originalText) {
   console.log(`📊 JSON extraído: ${rawJson.substring(0, 100)}...`);
   
   // 5. Validar que el mensaje no esté vacío
-  if (!messageText || messageText.length < 10) {
+  if (!messageText || messageText.length < 4) {
     console.error(`❌ Mensaje muy corto o vacío después de parsing`);
     console.error(`Contenido original:`, rawOutput);
     
@@ -450,7 +450,7 @@ function parseAIResponse(rawOutput, originalText) {
     const lines = cleanOutput.split("\n");
     messageText = lines.slice(0, -1).join("\n").trim();
     
-    if (!messageText || messageText.length < 10) {
+    if (!messageText || messageText.length < 4) {
       // Último recurso: usar mensaje de fallback
       messageText = "Gracias por tu mensaje. 😊 ¿En qué puedo ayudarte?";
       console.warn(`⚠️ Usando mensaje de fallback`);
