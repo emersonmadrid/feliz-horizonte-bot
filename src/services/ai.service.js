@@ -1,4 +1,4 @@
-// src/services/ai.service.js - VERSIÓN MEJORADA
+// src/services/ai.service.js - VERSIÓN MEJORADA CON MEJOR DETECCIÓN
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -22,7 +22,7 @@ PERSONALIDAD Y TONO:
 - Usa "tú" (tuteo)
 - Emojis con moderación: 💙 🤗 ✨ 😊
 - NUNCA seas repetitivo ni redundante
-- Mantén CONTINUIDAD conversacional - recuerda lo que ya dijiste
+- Mantén CONTINUIDAD conversacional
 
 LÍMITES PROFESIONALES:
 - NUNCA diagnostiques
@@ -31,28 +31,27 @@ LÍMITES PROFESIONALES:
 - NO ofrezcas descuentos no autorizados
 
 SERVICIOS:
-1. Terapia Psicológica:
+1. Terapia Psicológica (psicología, psicólogo, terapia):
    - Precio: S/ 140 (50 min)
    - Modalidad: 100% online (Zoom/Meet)
    - Profesional: Lic. Cintya Isabel (psicóloga colegiada)
    - Enfoque: cognitivo-conductual
-   - Para: ansiedad, depresión, estrés, pareja, autoestima, duelo
 
-2. Consulta Psiquiátrica:
+2. Consulta Psiquiátrica (psiquiatría, psiquiatra):
    - Precio: S/ 200
    - Modalidad: 100% online (Zoom/Meet)
    - Profesional: Dra. Yasmín Meneses (médica psiquiatra)
    - Incluye: evaluación médica, diagnóstico, prescripción si necesario
 
-PAGOS: Yape, Plin, transferencia bancaria (datos se comparten al confirmar cita)
+PAGOS: Yape, Plin, transferencia bancaria
 
 POLÍTICAS:
 - Reprogramación: con 24h de anticipación sin penalización
-- Confidencialidad: 100% garantizada (código ético)
+- Confidencialidad: 100% garantizada
 - Primera sesión: evaluación inicial
-- Solo con cita previa (no hay atención sin agendar)
+- Solo con cita previa
 
-HORARIOS (referenciales - SIEMPRE confirmar):
+HORARIOS (referenciales):
 - Lunes a Viernes: 9:00 AM - 8:00 PM
 - Sábados: 9:00 AM - 2:00 PM  
 - Domingos: CERRADO
@@ -61,16 +60,18 @@ DIFERENCIAS CLAVE:
 - Psicólogo: terapia conversacional, estrategias de afrontamiento
 - Psiquiatra: médica(o) que puede recetar medicamentos
 
-LINKS DE AGENDA (mencionar cuando sea relevante):
-- Terapia: [el backend agregará el link de Calendly]
-- Psiquiatría: [el backend agregará el link de Calendly]
+DETECCIÓN DE SERVICIO - MUY IMPORTANTE:
+Si el cliente menciona:
+- "psicología", "psicólogo", "psicóloga", "terapia", "terapeuta" → service: "therapy"
+- "psiquiatría", "psiquiatra" → service: "psychiatry"
+- Si NO especifica → service: null (preguntar cuál prefiere)
 
 INTENCIONES A DETECTAR:
+- agendar: quiere reservar cita (palabras clave: "quiero cita", "agendar", "reservar", "para psicología", "con psicólogo")
 - precios: pregunta por costos/tarifas
 - servicios: pregunta qué ofrecen
 - horarios: pregunta disponibilidad
 - pago: pregunta formas de pago
-- agendar: quiere reservar cita
 - reprogramar: quiere cambiar cita existente
 - diferencia: no sabe si elegir psicólogo o psiquiatra
 - despedida: se despide o agradece
@@ -80,70 +81,62 @@ INTENCIONES A DETECTAR:
 
 PRIORIDAD:
 - HIGH: medicación en curso, queja, menores/pareja/familia, caso personal complejo, urgencia
-- LOW: consultas generales, información básica
+- LOW: consultas generales, información básica, agendamiento simple
 
 NOTIFY_HUMAN (cuándo derivar a humano):
-- true: casos complejos, medicación, quejas, solicitudes de horarios específicos para HOY, confusión persistente
-- false: consultas simples bien resueltas por IA
+- true: casos complejos, medicación, quejas, solicitudes específicas de horario para HOY, confusión persistente
+- false: consultas simples bien resueltas por IA, agendamiento de terapia (se envía link automático)
 
 FORMATO DE RESPUESTA:
 Línea 1-N: Tu mensaje empático para WhatsApp (3-6 líneas máximo)
 Última línea: JSON de metadata en UNA SOLA LÍNEA:
 {"intent":"...", "priority":"low|high", "notify_human":true|false, "service":"therapy|psychiatry|null", "suggested_actions":[], "confidence":0.0-1.0}
 
-REGLAS CRÍTICAS ANTI-REPETICIÓN:
+EJEMPLOS CRÍTICOS:
+
+Ejemplo 1 - Cliente dice "quiero cita con psicología":
+Respuesta:
+¡Perfecto! Para agendar tu cita de terapia psicológica con la Lic. Cintya Isabel (S/ 140, 50 min), puedes elegir el horario que mejor te acomode en nuestro calendario. 📅✨
+{"intent":"agendar", "priority":"low", "notify_human":false, "service":"therapy", "suggested_actions":["send_calendly"], "confidence":0.95}
+
+Ejemplo 2 - Cliente dice "para psicología":
+Respuesta:
+Excelente elección. Nuestra terapia psicológica es con la Lic. Cintya Isabel (S/ 140, 50 min, online). Selecciona el día y hora que prefieras. 😊
+{"intent":"agendar", "priority":"low", "notify_human":false, "service":"therapy", "suggested_actions":["send_calendly"], "confidence":0.95}
+
+Ejemplo 3 - Cliente dice "quiero cita con psiquiatra":
+Respuesta:
+Entendido, consulta psiquiátrica con la Dra. Yasmín Meneses (S/ 200). Un miembro del equipo te contactará para coordinar el mejor horario. 👤
+{"intent":"agendar", "priority":"low", "notify_human":true, "service":"psychiatry", "suggested_actions":["transfer_human"], "confidence":0.95}
+
+REGLAS ANTI-REPETICIÓN:
 1. Lee el contexto conversacional COMPLETO
 2. NO repitas información ya dada
 3. SI ya explicaste los precios, NO los expliques de nuevo
 4. SI el cliente ya eligió un servicio, AVANZA hacia el agendamiento
-5. Detecta cuando el cliente está frustrado por la repetición
-6. Si el cliente dice "sí" o responde afirmativamente, ASUME que acepta y continúa el flujo
-7. NO regreses al mensaje de bienvenida si ya hay conversación activa
+5. Si el cliente dice "sí" o confirma, ASUME que acepta y envía el link
+6. NO regreses al mensaje de bienvenida si ya hay conversación activa
 
-EJEMPLOS DE RESPUESTAS:
-
-Ejemplo 1 - Primera consulta:
-Cliente: "Hola, cuánto cuesta?"
-Respuesta:
-¡Hola! 😊 Nuestros servicios son:
-• Terapia Psicológica: S/ 140 (50 min)
-• Consulta Psiquiátrica: S/ 200
-
-¿Te gustaría agendar alguna de estas opciones?
-{"intent":"precios", "priority":"low", "notify_human":false, "service":null, "suggested_actions":["show_prices"], "confidence":0.95}
-
-Ejemplo 2 - Continuación (cliente ya sabe precios):
-Cliente: "psicología"
-Respuesta:
-Perfecto, terapia con la Lic. Cintya Isabel (S/ 140, 50 min). ¿Para cuándo te gustaría agendar? Tenemos disponibilidad de lunes a viernes de 9 AM a 8 PM, y sábados de 9 AM a 2 PM. 📅
-{"intent":"agendar", "priority":"low", "notify_human":true, "service":"therapy", "suggested_actions":["send_calendly_link"], "confidence":0.9}
-
-Ejemplo 3 - Cliente frustrado por repetición:
-Cliente: "me ibas a dar una cita"
-Respuesta:
-Tienes razón, disculpa. Para agendar tu cita de terapia psicológica necesito derivarte con mi equipo que tiene acceso al calendario en tiempo real. Ellos te confirmarán el horario disponible de inmediato. 😊
-{"intent":"agendar", "priority":"high", "notify_human":true, "service":"therapy", "suggested_actions":["transfer_to_human"], "confidence":0.85}
-
-NO PIDAS NI GUARDES DATOS SENSIBLES (diagnósticos, medicamentos específicos, historias clínicas detalladas) por chat.
+NO PIDAS NI GUARDES DATOS SENSIBLES por chat.
 `.trim();
 
-// 🆕 NUEVO: Historial de conversaciones por teléfono
-const conversationHistory = new Map(); // phone -> [messages]
+// Historial de conversaciones por teléfono
+const conversationHistory = new Map();
 
 export async function generateAIReply({ text, conversationContext = null, phone = null }) {
-  // 🆕 Construir contexto conversacional
+  // Construir contexto conversacional
   let contextPrompt = "";
   
   if (phone && conversationHistory.has(phone)) {
     const history = conversationHistory.get(phone);
-    const recentMessages = history.slice(-4); // Últimos 4 mensajes
+    const recentMessages = history.slice(-4);
     
     if (recentMessages.length > 0) {
       contextPrompt = "\n\nCONTEXTO DE CONVERSACIÓN PREVIA:\n";
       recentMessages.forEach((msg, idx) => {
         contextPrompt += `${msg.role === 'user' ? 'Cliente' : 'Tú'}: "${msg.text}"\n`;
       });
-      contextPrompt += "\nIMPORTANTE: NO repitas lo que ya dijiste. Continúa la conversación naturalmente.\n";
+      contextPrompt += "\nIMPORTANTE: NO repitas lo que ya dijiste. Si el cliente ya eligió el servicio, envía el link directamente.\n";
     }
   }
   
@@ -172,7 +165,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     const lines = out.split("\n");
     let rawJson = lines[lines.length - 1];
     
-    // Buscar el JSON (puede estar en cualquier línea que empiece con {)
+    // Buscar el JSON
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].trim().startsWith("{")) {
         rawJson = lines[i].trim();
@@ -193,27 +186,47 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     };
     
     try {
-      // Limpiar el JSON de posibles backticks o markdown
       const cleanJson = rawJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       meta = JSON.parse(cleanJson);
     } catch (parseError) {
       console.error("❌ Error parseando JSON de IA:", parseError.message);
       console.error("JSON recibido:", rawJson);
-      // Intentar extraer manualmente algunos campos clave
+      
+      // Intentar extraer manualmente
       try {
         const intentMatch = rawJson.match(/"intent"\s*:\s*"([^"]+)"/);
         const priorityMatch = rawJson.match(/"priority"\s*:\s*"([^"]+)"/);
         const notifyMatch = rawJson.match(/"notify_human"\s*:\s*(true|false)/);
+        const serviceMatch = rawJson.match(/"service"\s*:\s*"([^"]+)"/);
         
         if (intentMatch) meta.intent = intentMatch[1];
         if (priorityMatch) meta.priority = priorityMatch[1];
         if (notifyMatch) meta.notify_human = notifyMatch[1] === 'true';
+        if (serviceMatch) meta.service = serviceMatch[1] === 'null' ? null : serviceMatch[1];
       } catch {
         // Usar valores por defecto
       }
     }
 
-    // 🆕 Guardar en historial
+    // 🆕 NUEVO: Detección manual de servicio si la IA falló
+    if (!meta.service || meta.service === 'null') {
+      const textLower = text.toLowerCase();
+      if (/(psicolog[íi]a|psic[óo]log[oa]|terapia|terapeuta)/i.test(textLower)) {
+        meta.service = 'therapy';
+        console.log(`🔧 Detección manual: servicio = therapy`);
+      } else if (/(psiquiatr[íi]a|psiquiatra)/i.test(textLower)) {
+        meta.service = 'psychiatry';
+        console.log(`🔧 Detección manual: servicio = psychiatry`);
+      }
+    }
+
+    // 🆕 NUEVO: Si detecta "agendar" + "therapy", NO derivar a humano
+    if (meta.intent === 'agendar' && meta.service === 'therapy') {
+      meta.notify_human = false;
+      console.log(`🔧 Override: agendamiento de terapia = auto-respuesta`);
+    }
+
+    // Guardar en historial
     if (phone) {
       if (!conversationHistory.has(phone)) {
         conversationHistory.set(phone, []);
@@ -222,13 +235,12 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       history.push({ role: 'user', text, timestamp: Date.now() });
       history.push({ role: 'assistant', text: message, timestamp: Date.now() });
       
-      // Mantener solo los últimos 10 mensajes (5 intercambios)
       if (history.length > 10) {
         history.splice(0, history.length - 10);
       }
     }
 
-    // 🆕 Lógica adicional: si detectamos frustración, siempre derivar a humano
+    // Lógica de frustración
     const frustrationKeywords = [
       'ya te dije', 'ya dije', 'ya lo mencioné', 'repites', 'otra vez',
       'me ibas', 'ibas a', 'dijiste que', 'prometiste', 'cansado',
@@ -244,12 +256,14 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       console.log(`⚠️ Frustración detectada en: "${text}"`);
     }
 
-    // 🆕 Si el cliente menciona "hoy" o "ahora", derivar a humano
+    // Si el cliente menciona "hoy" o "ahora", derivar a humano
     if (/\b(hoy|ahora|ahorita|ya|inmediato)\b/i.test(text) && 
         (meta.intent === 'agendar' || meta.intent === 'horarios')) {
       meta.notify_human = true;
       console.log(`⚠️ Solicitud urgente detectada: "${text}"`);
     }
+
+    console.log(`📊 Meta final:`, JSON.stringify(meta));
 
     return { message, meta };
   } catch (e) {
@@ -269,7 +283,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
   }
 }
 
-// 🆕 NUEVO: Función para limpiar historial viejo
+// Función para limpiar historial viejo
 export function cleanOldConversations() {
   const now = Date.now();
   const ONE_HOUR = 60 * 60 * 1000;
@@ -288,10 +302,8 @@ export function cleanOldConversations() {
   }
 }
 
-// Limpiar cada 30 minutos
 setInterval(cleanOldConversations, 30 * 60 * 1000);
 
-// 🆕 NUEVO: Exportar función para resetear historial (útil para testing)
 export function resetConversationHistory(phone) {
   conversationHistory.delete(phone);
   console.log(`🔄 Historial reseteado para ${phone}`);
