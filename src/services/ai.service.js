@@ -147,16 +147,16 @@ NO incluyas ningún código, JSON ni caracteres especiales como { o }.
 {"intent":"X", "priority":"low|medium|high", "notify_human":true|false, "service":"therapy|psychiatry|null", "suggested_actions":[], "confidence":0.0-1.0}
 
 EJEMPLO CORRECTO:
-```
+\`\`\`
 ¡Perfecto! Nuestras terapias son para todas las edades. ¿Tu mamá prefiere psicología o psiquiatría? Así te comparto el link para agendar. 😊
 
 {"intent":"agendar","priority":"low","notify_human":false,"service":null,"suggested_actions":["ask_service"],"confidence":0.9}
-```
+\`\`\`
 
 NUNCA HAGAS ESTO (INCORRECTO):
-```
+\`\`\`
 ¡Perfecto! {"intent":"agendar"} Nuestras terapias...
-```
+\`\`\`
 
 El JSON SIEMPRE va al final, NUNCA en medio del mensaje.
 
