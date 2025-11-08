@@ -68,6 +68,39 @@ const topicToPhone = new Map();
 // Control de conversaciones activas
 const activeConversations = new Map();
 
+const DEFAULT_CONVERSATION_STATE = {
+  lastMessageTime: 0,
+  isHumanHandling: false,
+  awaitingScheduling: false,
+  lastIntent: null,
+  context: null,
+  buttonsSent: false,
+  servicePreference: null,
+};
+
+function ensureConversationState(phone) {
+  if (!activeConversations.has(phone)) {
+    activeConversations.set(phone, { ...DEFAULT_CONVERSATION_STATE });
+  }
+  return activeConversations.get(phone);
+}
+
+function mergeConversationState(phone, updates = {}) {
+  const current = ensureConversationState(phone);
+  const next = { ...current, ...updates };
+  activeConversations.set(phone, next);
+  return next;
+}
+
+function getConversationState(phone) {
+  return activeConversations.get(phone) || null;
+}
+
+const SERVICE_BUTTON_IDS = {
+  therapy: "FH_SERVICE_THERAPY",
+  psychiatry: "FH_SERVICE_PSYCHIATRY",
+};
+
 // Lista negra de palabras ofensivas
 const OFFENSIVE_WORDS = [
   'chucha', 'mierda', 'carajo', 'huevón', 'conchatumadre', 'ctm',
@@ -130,6 +163,39 @@ async function sendWhatsAppText(to, text) {
     { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
   );
   console.log(`✅ WhatsApp enviado exitosamente a ${to}`);
+}
+
+async function sendWhatsAppButtons(to) {
+  const welcomeText =
+    "Hola 👋 Soy el asistente virtual de Feliz Horizonte. ¿Te gustaría hablar con psicología o psiquiatría?";
+
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Botones WhatsApp → ${to}: ${welcomeText}`);
+    return;
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  console.log(`📤 Enviando botones de bienvenida a ${to}`);
+  await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: welcomeText },
+        action: {
+          buttons: [
+            { type: "reply", reply: { id: SERVICE_BUTTON_IDS.therapy, title: "Psicología" } },
+            { type: "reply", reply: { id: SERVICE_BUTTON_IDS.psychiatry, title: "Psiquiatría" } },
+          ],
+        },
+      },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+  console.log(`✅ Botones enviados a ${to}`);
 }
 
 function escapeHTML(s = "") {
@@ -334,7 +400,7 @@ if (!USE_WEBHOOK) {
         return;
       }
 
-      activeConversations.set(phone, {
+      mergeConversationState(phone, {
         lastMessageTime: Date.now(),
         isHumanHandling: true,
         awaitingScheduling: false
@@ -516,7 +582,7 @@ app.post("/telegram/webhook", async (req, res) => {
         console.log(`   Hacia número: ${phone}`);
         console.log(`   Mensaje: "${text}"`);
 
-        activeConversations.set(phone, {
+        mergeConversationState(phone, {
           lastMessageTime: Date.now(),
           isHumanHandling: true,
           awaitingScheduling: false
@@ -577,23 +643,70 @@ app.post("/webhook/whatsapp", async (req, res) => {
     }
 
     const from = msg.from;
-    const text = (msg.text?.body || "").trim();
+    let text = (msg.text?.body || "").trim();
+    let conversationContext = getConversationState(from);
+
+    const interactive = msg?.interactive;
+    let buttonSelection = null;
+    let selectionTitle = "";
+
+    if (interactive?.button_reply) {
+      buttonSelection = interactive.button_reply.id;
+      selectionTitle = interactive.button_reply.title || "";
+    } else if (interactive?.list_reply) {
+      buttonSelection = interactive.list_reply.id;
+      selectionTitle = interactive.list_reply.title || "";
+    }
+
+    if (selectionTitle) {
+      text = selectionTitle.trim();
+    } else {
+      text = text.trim();
+    }
+
+    if (!text && buttonSelection) {
+      text = buttonSelection;
+    }
+
+    if (buttonSelection) {
+      let selectedService = null;
+      if (buttonSelection === SERVICE_BUTTON_IDS.therapy) {
+        selectedService = "therapy";
+      } else if (buttonSelection === SERVICE_BUTTON_IDS.psychiatry) {
+        selectedService = "psychiatry";
+      }
+
+      if (selectedService) {
+        console.log(`🎯 Botón seleccionado (${selectedService}) por ${from}`);
+        conversationContext = mergeConversationState(from, { servicePreference: selectedService });
+      }
+    }
 
     console.log(`💬 WhatsApp de ${from}: "${text}"`);
 
     await ensureTopicForPhone(from);
 
-    // Obtener contexto de conversación
-    const conversationContext = activeConversations.get(from);
-    const timeSinceLastMessage = conversationContext
-      ? Date.now() - conversationContext.lastMessageTime
+    const lastMessageTimestamp = conversationContext?.lastMessageTime || 0;
+    const timeSinceLastMessage = lastMessageTimestamp
+      ? Date.now() - lastMessageTimestamp
       : Infinity;
 
-    // Si pasaron más de 15 minutos, resetear el flag de humano
-    if (timeSinceLastMessage > 15 * 60 * 1000) {
-      if (conversationContext) {
-        conversationContext.isHumanHandling = false;
+    if (!conversationContext) {
+      conversationContext = ensureConversationState(from);
+    }
+
+    if (!conversationContext.buttonsSent) {
+      try {
+        await sendWhatsAppButtons(from);
+        conversationContext = mergeConversationState(from, { buttonsSent: true });
+      } catch (err) {
+        console.error("❌ Error enviando botones de bienvenida:", err?.response?.data || err.message);
       }
+    }
+
+    // Si pasaron más de 15 minutos, resetear el flag de humano
+    if (timeSinceLastMessage > 15 * 60 * 1000 && conversationContext.isHumanHandling) {
+      conversationContext.isHumanHandling = false;
     }
 
     // Emergencia
@@ -604,7 +717,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
       await saveMeta({ phone: from, emergency: true, required_human: true });
 
-      activeConversations.set(from, {
+      mergeConversationState(from, {
         lastMessageTime: Date.now(),
         isHumanHandling: true,
         awaitingScheduling: false
@@ -621,7 +734,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
       await saveMeta({ phone: from });
 
-      activeConversations.set(from, {
+      mergeConversationState(from, {
         lastMessageTime: Date.now(),
         isHumanHandling: false,
         awaitingScheduling: false
@@ -686,7 +799,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     // Actualizar contexto de conversación
     const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
 
-    activeConversations.set(from, {
+    mergeConversationState(from, {
       lastMessageTime: Date.now(),
       isHumanHandling: !shouldAutoReply,
       awaitingScheduling: isSchedulingIntent,

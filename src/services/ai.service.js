@@ -175,6 +175,12 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     if (conversationContext.lastIntent) {
       contextPrompt += `- Última intención detectada: ${conversationContext.lastIntent}\n`;
     }
+    if (conversationContext.servicePreference) {
+      const label = conversationContext.servicePreference === 'therapy'
+        ? 'terapia psicológica'
+        : 'consulta psiquiátrica';
+      contextPrompt += `- El cliente indicó interés en ${label}\n`;
+    }
   }
 
   const input = `${BUSINESS_INFO}${contextPrompt}\n\nMensaje actual del cliente:\n"${text}"\n\nRespuesta:`;
@@ -283,6 +289,11 @@ export async function generateAIReply({ text, conversationContext = null, phone 
         meta.service = 'psychiatry';
         console.log(`🔧 Detección manual: servicio = psychiatry`);
       }
+    }
+
+    if (conversationContext?.servicePreference && (!meta.service || meta.service === 'null')) {
+      meta.service = conversationContext.servicePreference;
+      console.log(`🔧 Override: servicio definido por botones = ${meta.service}`);
     }
 
     // Si detecta "agendar" + "therapy", NO derivar a humano
