@@ -43,7 +43,7 @@ if (USE_WEBHOOK) {
   axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
     url: webhookUrl,
     drop_pending_updates: true,
-    allowed_updates: ["message", "edited_message"]
+    allowed_updates: ["message", "edited_message", "callback_query"]
   })
     .then((response) => {
       console.log(`✅ Webhook configurado exitosamente`);
@@ -559,7 +559,7 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
   }
 });
 
-bot.on('callback_query', async (query) => {
+async function handleCallbackQuery(query) {
   try {
     const data = query.data;
     const msgId = query.message.message_id;
@@ -639,7 +639,9 @@ bot.on('callback_query', async (query) => {
       show_alert: true
     });
   }
-});
+}
+
+bot.on('callback_query', handleCallbackQuery);
 
 bot.onText(/^\/auto$/i, async (msg) => {
   console.log(`🤖 Comando /auto recibido de ${msg.chat.id}`);
@@ -877,10 +879,17 @@ app.get("/admin/list-topics", async (req, res) => {
 app.post("/telegram/webhook", async (req, res) => {
   try {
     const update = req.body;
+    const callbackQuery = update?.callback_query;
     const msg = update?.message;
 
     console.log("📥 TELEGRAM WEBHOOK RECIBIDO:");
     console.log(JSON.stringify(update, null, 2));
+
+    if (callbackQuery) {
+      console.log("📲 Procesando callback_query recibido por webhook");
+      await handleCallbackQuery(callbackQuery);
+      return res.sendStatus(200);
+    }
 
     if (!msg) {
       console.log("⚠️ Telegram webhook sin mensaje");
