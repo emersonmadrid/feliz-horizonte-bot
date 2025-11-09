@@ -13,6 +13,13 @@ if (!API_KEY || !API_KEY.startsWith("AIza")) {
 
 const genAI = new GoogleGenerativeAI(API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const multimodalModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const audioReplyModel = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash",
+  generationConfig: {
+    responseMimeType: "audio/mpeg",
+  },
+});
 
 // REEMPLAZAR en src/services/ai.service.js - Sección del BUSINESS_INFO
 
@@ -40,7 +47,7 @@ SERVICIOS:
    - Enfoque: cognitivo-conductual
 
 2. Consulta Psiquiátrica (psiquiatría, psiquiatra):
-   - Precio: S/ 150
+   - Precio: S/ 139
    - Modalidad: 100% online (Zoom/Meet)
    - Profesional: Dra. Yasmín Meneses (médica psiquiatra)
    - Incluye: evaluación médica, diagnóstico, prescripción si necesario
@@ -357,6 +364,79 @@ export async function generateAIReply({ text, conversationContext = null, phone 
         confidence: 0.1,
       },
     };
+  }
+}
+
+export async function transcribeAudioBuffer({ buffer, mimeType = "audio/ogg", prompt = null }) {
+  if (!buffer || !buffer.length) {
+    throw new Error("Audio buffer vacío");
+  }
+
+  const instruction =
+    prompt ||
+    "Transcribe con precisión este audio, conserva la puntuación natural y no agregues comentarios adicionales.";
+
+  try {
+    const response = await multimodalModel.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: instruction },
+            {
+              inlineData: {
+                data: buffer.toString("base64"),
+                mimeType,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const transcription = response?.response?.text?.() || response?.response?.text || "";
+    return (typeof transcription === "function" ? transcription() : transcription)?.trim() || "";
+  } catch (err) {
+    console.error("❌ Error transcribiendo audio:", err?.message);
+    throw err;
+  }
+}
+
+export async function synthesizeAudioFromText(text, { promptPrefix = null } = {}) {
+  const cleanText = (text || "").trim();
+  if (!cleanText) {
+    throw new Error("Texto vacío para sintetizar audio");
+  }
+
+  const prompt =
+    promptPrefix ||
+    "Convierte el texto a un mensaje de voz claro, cálido y profesional en español peruano.";
+
+  try {
+    const response = await audioReplyModel.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: `${prompt}\n\nTexto:\n${cleanText}` }],
+        },
+      ],
+    });
+
+    const audioPart = response?.response?.candidates
+      ?.flatMap((candidate) => candidate?.content?.parts || [])
+      ?.find((part) => part.inlineData?.data);
+
+    if (!audioPart?.inlineData?.data) {
+      throw new Error("La IA no devolvió audio");
+    }
+
+    return {
+      buffer: Buffer.from(audioPart.inlineData.data, "base64"),
+      mimeType: audioPart.inlineData.mimeType || "audio/mpeg",
+    };
+  } catch (err) {
+    console.error("❌ Error generando audio:", err?.message);
+    throw err;
   }
 }
 

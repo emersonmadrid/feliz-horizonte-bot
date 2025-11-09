@@ -2,9 +2,10 @@
 import dotenv from "dotenv";
 import express from "express";
 import axios from "axios";
+import FormData from "form-data";
 import { createClient } from "@supabase/supabase-js";
 import TelegramBot from "node-telegram-bot-api";
-import { generateAIReply } from "./services/ai.service.js";
+import { generateAIReply, synthesizeAudioFromText, transcribeAudioBuffer } from "./services/ai.service.js";
 
 dotenv.config();
 const app = express();
@@ -24,6 +25,9 @@ const {
   VERCEL,
   VERCEL_ENV,
 } = process.env;
+
+const ENABLE_AUDIO_TRANSCRIPTION = (process.env.WHATSAPP_AUDIO_TRANSCRIPTION ?? "1") === "1";
+const ENABLE_AUDIO_RESPONSES = (process.env.WHATSAPP_AUDIO_RESPONSES ?? "0") === "1";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const USE_WEBHOOK = VERCEL === "1" && VERCEL_ENV === "production" && PUBLIC_URL;
@@ -196,6 +200,148 @@ async function sendWhatsAppButtons(to) {
     { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
   );
   console.log(`✅ Botones enviados a ${to}`);
+}
+
+async function downloadWhatsAppMedia(mediaId) {
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    throw new Error("No hay credenciales de la API de WhatsApp para descargar audio");
+  }
+  if (!mediaId) {
+    throw new Error("mediaId no proporcionado");
+  }
+
+  const baseHeaders = { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` };
+  const metaUrl = `https://graph.facebook.com/v20.0/${mediaId}`;
+
+  const metaResponse = await axios.get(metaUrl, { headers: baseHeaders });
+  const mediaUrl = metaResponse?.data?.url;
+  if (!mediaUrl) {
+    throw new Error("No se recibió una URL para el audio");
+  }
+
+  const fileResponse = await axios.get(mediaUrl, {
+    headers: baseHeaders,
+    responseType: "arraybuffer",
+  });
+
+  return {
+    buffer: Buffer.from(fileResponse.data),
+    mimeType: metaResponse?.data?.mime_type || fileResponse.headers["content-type"] || "audio/ogg",
+    sha256: metaResponse?.data?.sha256 || null,
+    mediaId,
+  };
+}
+
+async function transcribeWhatsAppAudio(msg) {
+  if (!ENABLE_AUDIO_TRANSCRIPTION) {
+    return {
+      text: "",
+      transcribed: false,
+    };
+  }
+
+  const audioPayload = msg?.audio || msg?.voice || null;
+  const mediaId = audioPayload?.id;
+
+  if (!mediaId) {
+    throw new Error("Mensaje de audio sin mediaId");
+  }
+
+  const media = await downloadWhatsAppMedia(mediaId);
+  const transcription = await transcribeAudioBuffer({
+    buffer: media.buffer,
+    mimeType: media.mimeType,
+  });
+
+  return {
+    text: transcription,
+    mimeType: media.mimeType,
+    transcribed: Boolean(transcription),
+  };
+}
+
+async function uploadWhatsAppAudio(buffer, mimeType = "audio/mpeg") {
+  if (!buffer || !buffer.length) {
+    throw new Error("Buffer de audio vacío");
+  }
+
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Subir audio (${mimeType}) - ${buffer.length} bytes`);
+    return { id: "simulated-audio-id" };
+  }
+
+  const uploadUrl = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/media`;
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mimeType);
+  form.append(
+    "file",
+    buffer,
+    {
+      filename: `voz-${Date.now()}.${mimeType.split("/")[1] || "mp3"}`,
+      contentType: mimeType,
+    }
+  );
+
+  const response = await axios.post(uploadUrl, form, {
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_API_TOKEN}`,
+      ...form.getHeaders(),
+    },
+    maxBodyLength: Infinity,
+  });
+
+  return response?.data;
+}
+
+async function sendWhatsAppAudioMessage(to, audioBuffer, mimeType = "audio/mpeg") {
+  if (!audioBuffer || !audioBuffer.length) {
+    throw new Error("Audio vacío para enviar");
+  }
+
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Audio WhatsApp → ${to} (${mimeType}, ${audioBuffer.length} bytes)`);
+    return;
+  }
+
+  const upload = await uploadWhatsAppAudio(audioBuffer, mimeType);
+  const mediaId = upload?.id;
+
+  if (!mediaId) {
+    throw new Error("No se obtuvo mediaId al subir el audio");
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "audio",
+      audio: {
+        id: mediaId,
+        voice: true,
+      },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+
+  console.log(`🎧 Audio enviado a ${to}`);
+}
+
+async function sendVoiceNoteIfEnabled(to, text, source = "ai") {
+  if (!ENABLE_AUDIO_RESPONSES) return;
+
+  const cleanText = (text || "").trim();
+  if (!cleanText) return;
+
+  try {
+    const { buffer, mimeType } = await synthesizeAudioFromText(cleanText);
+    await sendWhatsAppAudioMessage(to, buffer, mimeType);
+    console.log(`🎤 Audio (${source}) enviado a ${to}`);
+  } catch (err) {
+    console.error(`⚠️ Error enviando audio (${source}):`, err?.response?.data || err.message);
+  }
 }
 
 function escapeHTML(s = "") {
@@ -643,8 +789,10 @@ app.post("/webhook/whatsapp", async (req, res) => {
     }
 
     const from = msg.from;
-    let text = (msg.text?.body || "").trim();
+    const audioPayload = msg.audio || msg.voice || null;
+    let text = (msg.text?.body || audioPayload?.caption || "").trim();
     let conversationContext = getConversationState(from);
+    let audioTranscriptionInfo = null;
 
     const interactive = msg?.interactive;
     let buttonSelection = null;
@@ -668,6 +816,32 @@ app.post("/webhook/whatsapp", async (req, res) => {
       text = buttonSelection;
     }
 
+    if (!text && audioPayload) {
+      try {
+        audioTranscriptionInfo = await transcribeWhatsAppAudio(msg);
+        text = audioTranscriptionInfo.text?.trim();
+
+        if (!text) {
+          throw new Error("Transcripción vacía");
+        }
+      } catch (err) {
+        console.error("❌ No se pudo transcribir el audio:", err?.response?.data || err.message);
+        await notifyTelegram(
+          "⚠️ AUDIO SIN TRANSCRIPCIÓN",
+          [
+            `ID: ${audioPayload?.id || "N/A"}`,
+            `Motivo: ${err?.message || "Error desconocido"}`,
+          ],
+          from
+        );
+        await sendWhatsAppText(
+          from,
+          "Recibí tu audio pero no pude procesarlo. ¿Podrías escribirme lo más importante por texto, por favor? 💙"
+        );
+        return res.sendStatus(200);
+      }
+    }
+
     if (buttonSelection) {
       let selectedService = null;
       if (buttonSelection === SERVICE_BUTTON_IDS.therapy) {
@@ -682,7 +856,9 @@ app.post("/webhook/whatsapp", async (req, res) => {
       }
     }
 
-    console.log(`💬 WhatsApp de ${from}: "${text}"`);
+    const logPrefix = audioTranscriptionInfo ? "🎤 (audio)" : "💬";
+    console.log(`${logPrefix} WhatsApp de ${from}: "${text}"`);
+    const incomingTelegramLine = `${audioTranscriptionInfo ? "🎤" : "💬"} "${text || '(sin texto)'}"`;
 
     await ensureTopicForPhone(from);
 
@@ -715,7 +891,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       });
 
       await notifyTelegram("🔔 NUEVO MENSAJE", [
-        `💬 "${text || '(sin texto)'}"`,
+        incomingTelegramLine,
         "🕑 Se enviaron botones de servicio; esperando la selección del cliente."
       ], from);
 
@@ -732,7 +908,8 @@ app.post("/webhook/whatsapp", async (req, res) => {
     if (isEmergency) {
       console.log(`🚨 EMERGENCIA detectada de ${from}`);
       await sendWhatsAppText(from, crisisMessage);
-      await notifyTelegram("🚨 EMERGENCIA DETECTADA", [`💬 "${text}"`, "⚠️ Protocolo enviado. IA bloqueada."], from);
+      await sendVoiceNoteIfEnabled(from, crisisMessage, "emergency");
+      await notifyTelegram("🚨 EMERGENCIA DETECTADA", [incomingTelegramLine, "⚠️ Protocolo enviado. IA bloqueada."], from);
       await saveMeta({ phone: from, emergency: true, required_human: true });
 
       mergeConversationState(from, {
@@ -749,7 +926,8 @@ app.post("/webhook/whatsapp", async (req, res) => {
     if (quick) {
       console.log(`⚡ Quick answer para ${from}`);
       await sendWhatsAppText(from, quick);
-      await notifyTelegram("✅ Respondido automático (Quick)", [`💬 "${text}"`], from);
+      await sendVoiceNoteIfEnabled(from, quick, "quick");
+      await notifyTelegram("✅ Respondido automático (Quick)", [incomingTelegramLine], from);
       await saveMeta({ phone: from });
 
       mergeConversationState(from, {
@@ -764,7 +942,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     // Si un humano está manejando, NO responder con IA
     if (conversationContext?.isHumanHandling && timeSinceLastMessage < 15 * 60 * 1000) {
       console.log(`👤 Conversación manejada por humano, solo notificando...`);
-      await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [`💬 "${text}"`], from);
+      await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [incomingTelegramLine], from);
       await saveMeta({ phone: from, required_human: true });
 
       // Actualizar timestamp
@@ -808,7 +986,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const aiPreview = fullAIResponse.slice(0, 500);
     const aiSuffix = fullAIResponse.length > aiPreview.length ? "…" : "";
     await notifyTelegram("🔔 NUEVO MENSAJE", [
-      `💬 "${text}"`,
+      incomingTelegramLine,
       `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
       `🧠 Respuesta IA: "${aiPreview}${aiSuffix}"`
     ], from);
@@ -833,6 +1011,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     if (trimmedFinalMessage) {
       console.log(`🤖 Enviando respuesta IA a ${from} (notify_human=${requiresHuman})`);
       await sendWhatsAppText(from, trimmedFinalMessage);
+      await sendVoiceNoteIfEnabled(from, trimmedFinalMessage, "ai");
     } else {
       console.log(`⚠️ Mensaje IA vacío para ${from}, no se envía a WhatsApp`);
     }
