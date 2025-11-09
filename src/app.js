@@ -66,6 +66,11 @@ const ADMIN = (TELEGRAM_ADMIN_CHAT_ID || "").toString();
 const PANEL_CHAT_ID = (TELEGRAM_GROUP_CHAT_ID || "").toString();
 const PANEL_TOPIC_ID = Number(TELEGRAM_TOPIC_ID_DEFAULT || 0);
 
+
+const HUMAN_TIMEOUT = 15 * 60 * 1000; // 15 minutos
+const HUMAN_WARNING_TIME = 12 * 60 * 1000; // Avisar a los 12 min
+const timeoutWarnings = new Map(); // Almacenar timeouts de advertencia
+
 const phoneToTopic = new Map();
 const topicToPhone = new Map();
 
@@ -348,6 +353,72 @@ function escapeHTML(s = "") {
   return s.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// Después de la función escapeHTML, AGREGAR esta función completa:
+
+function scheduleTimeoutWarning(phone) {
+  if (timeoutWarnings.has(phone)) {
+    clearTimeout(timeoutWarnings.get(phone));
+  }
+
+  const warningTimeout = setTimeout(async () => {
+    const topicId = await ensureTopicForPhone(phone);
+
+    if (topicId && PANEL_CHAT_ID) {
+      await bot.sendMessage(PANEL_CHAT_ID,
+        `⏰ <b>AVISO DE INACTIVIDAD</b>\n\n` +
+        `Han pasado 12 minutos sin actividad.\n` +
+        `En 3 minutos devolveré el control a la IA.\n\n` +
+        `<i>¿Deseas continuar atendiendo?</i>`,
+        {
+          parse_mode: "HTML",
+          message_thread_id: topicId,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "👤 Seguir atendiendo", callback_data: `keep_${phone}` }],
+              [{ text: "🤖 Devolver a IA ahora", callback_data: `release_${phone}` }]
+            ]
+          }
+        }
+      );
+    }
+
+    setTimeout(async () => {
+      const conversationContext = getConversationState(phone);
+      const timeSinceLastMessage = Date.now() - (conversationContext?.lastMessageTime || 0);
+
+      if (conversationContext?.isHumanHandling && timeSinceLastMessage >= HUMAN_TIMEOUT) {
+        mergeConversationState(phone, {
+          isHumanHandling: false,
+          awaitingScheduling: false
+        });
+
+        if (topicId && PANEL_CHAT_ID) {
+          await bot.sendMessage(PANEL_CHAT_ID,
+            `⏰ <b>TIMEOUT AUTOMÁTICO</b>\n\n` +
+            `Control devuelto a la IA por inactividad (15 min).\n\n` +
+            `<code>${escapeHTML(phone)}</code>`,
+            {
+              parse_mode: "HTML",
+              message_thread_id: topicId,
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: "👤 Retomar control", callback_data: `keep_${phone}` }
+                ]]
+              }
+            }
+          );
+        }
+
+        console.log(`⏰ Timeout automático: ${phone} devuelto a IA`);
+      }
+    }, HUMAN_TIMEOUT - HUMAN_WARNING_TIME);
+
+  }, HUMAN_WARNING_TIME);
+
+  timeoutWarnings.set(phone, warningTimeout);
+}
+
+
 async function ensureTopicForPhone(phone) {
   if (phoneToTopic.has(phone)) return phoneToTopic.get(phone);
 
@@ -488,6 +559,158 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
   }
 });
 
+bot.on('callback_query', async (query) => {
+  try {
+    const data = query.data;
+    const msgId = query.message.message_id;
+    const chatId = query.message.chat.id;
+    const topicId = query.message.message_thread_id;
+
+    console.log(`🔘 Callback recibido: ${data}`);
+
+    if (data.startsWith('release_')) {
+      const phone = data.replace('release_', '');
+
+      mergeConversationState(phone, {
+        isHumanHandling: false,
+        awaitingScheduling: false,
+        lastMessageTime: Date.now()
+      });
+
+      if (timeoutWarnings.has(phone)) {
+        clearTimeout(timeoutWarnings.get(phone));
+        timeoutWarnings.delete(phone);
+      }
+
+      await bot.editMessageText(
+        `✅ Control devuelto a la IA para ${phone}\n\n` +
+        `El bot responderá automáticamente los próximos mensajes.`,
+        {
+          chat_id: chatId,
+          message_id: msgId,
+          message_thread_id: topicId
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, {
+        text: '🤖 IA activada',
+        show_alert: false
+      });
+
+      console.log(`✅ Control devuelto a IA para ${phone}`);
+    }
+    else if (data.startsWith('keep_')) {
+      const phone = data.replace('keep_', '');
+
+      mergeConversationState(phone, {
+        isHumanHandling: true,
+        lastMessageTime: Date.now()
+      });
+
+      scheduleTimeoutWarning(phone);
+
+      await bot.editMessageText(
+        `👤 Control humano extendido para ${phone}\n\n` +
+        `Continuarás atendiendo esta conversación.`,
+        {
+          chat_id: chatId,
+          message_id: msgId,
+          message_thread_id: topicId,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🤖 Devolver a IA ahora", callback_data: `release_${phone}` }
+            ]]
+          }
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, {
+        text: '⏰ Tiempo extendido',
+        show_alert: false
+      });
+
+      console.log(`⏰ Timeout extendido para ${phone}`);
+    }
+
+  } catch (err) {
+    console.error('❌ Error en callback_query:', err.message);
+    await bot.answerCallbackQuery(query.id, {
+      text: '❌ Error procesando acción',
+      show_alert: true
+    });
+  }
+});
+
+bot.onText(/^\/auto$/i, async (msg) => {
+  console.log(`🤖 Comando /auto recibido de ${msg.chat.id}`);
+  if (String(msg.chat.id) !== PANEL_CHAT_ID) return;
+  if (!msg.message_thread_id) return;
+
+  const topicId = String(msg.message_thread_id);
+  const phone = topicToPhone.get(topicId);
+
+  if (!phone) {
+    return bot.sendMessage(PANEL_CHAT_ID,
+      "⚠️ No se encontró el teléfono asociado a este topic.",
+      { message_thread_id: msg.message_thread_id }
+    );
+  }
+
+  mergeConversationState(phone, {
+    isHumanHandling: false,
+    awaitingScheduling: false,
+    lastMessageTime: Date.now()
+  });
+
+  if (timeoutWarnings.has(phone)) {
+    clearTimeout(timeoutWarnings.get(phone));
+    timeoutWarnings.delete(phone);
+  }
+
+  await bot.sendMessage(PANEL_CHAT_ID,
+    `✅ Control devuelto a la IA para <code>${escapeHTML(phone)}</code>\n\n` +
+    `El bot responderá automáticamente los próximos mensajes.`,
+    {
+      parse_mode: "HTML",
+      message_thread_id: msg.message_thread_id
+    }
+  );
+});
+
+bot.onText(/^\/estado$/i, async (msg) => {
+  console.log(`📊 Comando /estado recibido de ${msg.chat.id}`);
+  if (String(msg.chat.id) !== PANEL_CHAT_ID) return;
+  if (!msg.message_thread_id) return;
+
+  const topicId = String(msg.message_thread_id);
+  const phone = topicToPhone.get(topicId);
+
+  if (!phone) {
+    return bot.sendMessage(PANEL_CHAT_ID,
+      "⚠️ No se encontró el teléfono asociado a este topic.",
+      { message_thread_id: msg.message_thread_id }
+    );
+  }
+
+  const context = getConversationState(phone);
+  const timeSinceLastMessage = context?.lastMessageTime
+    ? Math.floor((Date.now() - context.lastMessageTime) / 60000)
+    : 'N/A';
+
+  await bot.sendMessage(PANEL_CHAT_ID,
+    `📊 <b>Estado de conversación</b>\n\n` +
+    `📱 Teléfono: <code>${escapeHTML(phone)}</code>\n` +
+    `🤖 Control: ${context?.isHumanHandling ? '👤 HUMANO' : '🤖 IA'}\n` +
+    `⏰ Último mensaje: hace ${timeSinceLastMessage} min\n` +
+    `🎯 Última intención: ${context?.lastIntent || 'N/A'}\n` +
+    `📅 En agendamiento: ${context?.awaitingScheduling ? 'Sí' : 'No'}`,
+    {
+      parse_mode: "HTML",
+      message_thread_id: msg.message_thread_id
+    }
+  );
+});
+
 // TG → WA con filtro de mensajes ofensivos
 if (!USE_WEBHOOK) {
   bot.on("message", async (msg) => {
@@ -556,10 +779,23 @@ if (!USE_WEBHOOK) {
       await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
       console.log(`✅ TG → WA | topic ${topicId} → ${phone}`);
 
-      await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
-        parse_mode: "HTML",
-        message_thread_id: msg.message_thread_id,
-      });
+      // Programar timeout automático
+      scheduleTimeoutWarning(phone);
+
+      await bot.sendMessage(PANEL_CHAT_ID,
+        `📤 Enviado a <code>${escapeHTML(phone)}</code>\n\n` +
+        `💡 <i>Cuando termines, devuelve el control:</i>`,
+        {
+          parse_mode: "HTML",
+          message_thread_id: msg.message_thread_id,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🤖 Devolver a IA", callback_data: `release_${phone}` }
+            ]]
+          }
+        }
+      );
+
     } catch (e) {
       console.error("❌ TG→WA error:", e?.response?.data || e.message);
     }
@@ -739,10 +975,22 @@ app.post("/telegram/webhook", async (req, res) => {
 
         console.log(`✅ Mensaje reenviado exitosamente`);
 
-        await bot.sendMessage(PANEL_CHAT_ID, `📤 Enviado a <code>${escapeHTML(phone)}</code>`, {
-          parse_mode: "HTML",
-          message_thread_id: topicId,
-        });
+        // Programar timeout automático
+        scheduleTimeoutWarning(phone);
+
+        await bot.sendMessage(PANEL_CHAT_ID,
+          `📤 Enviado a <code>${escapeHTML(phone)}</code>\n\n` +
+          `💡 <i>Cuando termines, devuelve el control:</i>`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: topicId,
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "🤖 Devolver a IA", callback_data: `release_${phone}` }
+              ]]
+            }
+          }
+        );
       } else {
         console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
 
