@@ -709,6 +709,16 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     if (justSentButtons && !buttonSelection) {
       console.log(`⏸️ Botones enviados a ${from}, esperando selección antes de responder con IA`);
+      mergeConversationState(from, {
+        lastMessageTime: Date.now(),
+        context: text,
+      });
+
+      await notifyTelegram("🔔 NUEVO MENSAJE", [
+        `💬 "${text || '(sin texto)'}"`,
+        "🕑 Se enviaron botones de servicio; esperando la selección del cliente."
+      ], from);
+
       return res.sendStatus(200);
     }
 
@@ -804,25 +814,30 @@ app.post("/webhook/whatsapp", async (req, res) => {
     ], from);
 
     // Decide si auto-responder
-    const shouldAutoReply = !meta?.notify_human;
+    const requiresHuman = !!meta?.notify_human;
 
-    await saveMeta({ phone: from, required_human: !shouldAutoReply });
+    await saveMeta({ phone: from, required_human: requiresHuman });
 
     // Actualizar contexto de conversación
     const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
 
     mergeConversationState(from, {
       lastMessageTime: Date.now(),
-      isHumanHandling: !shouldAutoReply,
-      awaitingScheduling: isSchedulingIntent,
+      isHumanHandling: requiresHuman,
+      awaitingScheduling: !requiresHuman && isSchedulingIntent,
       lastIntent: meta?.intent,
       context: text
     });
 
-    if (shouldAutoReply) {
-      console.log(`🤖 Auto-respondiendo a ${from}`);
-      await sendWhatsAppText(from, finalMessage);
+    const trimmedFinalMessage = (finalMessage || "").trim();
+    if (trimmedFinalMessage) {
+      console.log(`🤖 Enviando respuesta IA a ${from} (notify_human=${requiresHuman})`);
+      await sendWhatsAppText(from, trimmedFinalMessage);
     } else {
+      console.log(`⚠️ Mensaje IA vacío para ${from}, no se envía a WhatsApp`);
+    }
+
+    if (requiresHuman) {
       console.log(`👤 Requiere respuesta humana para ${from}`);
       const topicId = await ensureTopicForPhone(from);
       if (topicId && PANEL_CHAT_ID) {
