@@ -794,9 +794,13 @@ app.post("/webhook/whatsapp", async (req, res) => {
     console.log(`🤖 IA respondió | intent: ${meta?.intent} | priority: ${meta?.priority} | notify: ${meta?.notify_human}`);
 
     // Notifica a Telegram
+    const fullAIResponse = finalMessage || "";
+    const aiPreview = fullAIResponse.slice(0, 500);
+    const aiSuffix = fullAIResponse.length > aiPreview.length ? "…" : "";
     await notifyTelegram("🔔 NUEVO MENSAJE", [
       `💬 "${text}"`,
       `🤖 IA: intent=${meta?.intent} priority=${meta?.priority} notify=${meta?.notify_human}`,
+      `🧠 Respuesta IA: "${aiPreview}${aiSuffix}"`
     ], from);
 
     // Decide si auto-responder
