@@ -1151,6 +1151,13 @@ app.post("/webhook/whatsapp", async (req, res) => {
       conversationContext.isHumanHandling = false;
     }
 
+   // Refrescar contexto antes de verificar (por si el botón lo cambió)
+conversationContext = getConversationState(from) || conversationContext;
+
+console.log(`🔍 Estado actual para ${from}:`, {
+  isHumanHandling: conversationContext?.isHumanHandling,
+  timeSinceLastMessage: Math.floor(timeSinceLastMessage / 1000) + 's'
+}); 
     // Emergencia
     const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
     if (isEmergency) {
@@ -1187,17 +1194,22 @@ app.post("/webhook/whatsapp", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // Si un humano está manejando, NO responder con IA
-    if (conversationContext?.isHumanHandling && timeSinceLastMessage < 15 * 60 * 1000) {
-      console.log(`👤 Conversación manejada por humano, solo notificando...`);
-      await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [incomingTelegramLine], from);
-      await saveMeta({ phone: from, required_human: true });
+// Si un humano está manejando, NO responder con IA
+if (conversationContext?.isHumanHandling) {
+  console.log(`👤 Conversación en modo HUMANO para ${from}, solo notificando...`);
+  await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [incomingTelegramLine], from);
+  await saveMeta({ phone: from, required_human: true });
 
-      // Actualizar timestamp
-      conversationContext.lastMessageTime = Date.now();
+  // Actualizar timestamp
+  mergeConversationState(from, {
+    lastMessageTime: Date.now()
+  });
 
-      return res.sendStatus(200);
-    }
+  return res.sendStatus(200);
+}
+
+// Si llegamos aquí, la IA puede responder
+console.log(`🤖 IA habilitada para ${from}, consultando...`);
 
     // IA (Gemini)
     console.log(`🤖 Consultando IA para mensaje de ${from}`);
