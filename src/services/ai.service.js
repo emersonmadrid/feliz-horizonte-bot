@@ -1,10 +1,16 @@
-// src/services/ai.service.js - VERSIÓN MEJORADA CON MEJOR DETECCIÓN
+// src/services/ai.service.js - VERSIÓN CORREGIDA CON HISTORIAL PERSISTENTE
 import dotenv from "dotenv";
 dotenv.config();
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getPromptConfig } from "../prompts/prompt-loader.js";
 import { buildPrompt, sanitizeGeminiApiKey } from "../utils/ai.utils.js";
+import {
+  saveMessage,
+  getConversationHistory,
+  formatHistoryForPrompt,
+  getHistoryStats
+} from "./conversation-history.service.js";
 
 const RAW_KEY = process.env.GEMINI_API_KEY || "";
 const API_KEY = sanitizeGeminiApiKey(RAW_KEY);
@@ -23,49 +29,51 @@ const audioReplyModel = genAI.getGenerativeModel({
   },
 });
 
-
-// Historial de conversaciones por teléfono
-const conversationHistory = new Map();
-
-// src/services/ai.service.js
-
 export async function generateAIReply({ text, conversationContext = null, phone = null }) {
-  // Construir contexto conversacional... (se mantiene tu lógica de contexto)
+  // 1. RECUPERAR HISTORIAL DESDE SUPABASE
   let contextPrompt = "";
   
-  if (phone && conversationHistory.has(phone)) {
-    const history = conversationHistory.get(phone);
-    const recentMessages = history.slice(-10);
+  if (phone) {
+    const history = await getConversationHistory(phone, 15); // Últimos 15 mensajes
     
-    if (recentMessages.length > 0) {
-      contextPrompt = "\n\nCONTEXTO DE CONVERSACIÓN PREVIA:\n";
-      recentMessages.forEach((msg) => {
-        contextPrompt += `${msg.role === 'user' ? 'Cliente' : 'Tú'}: "${msg.text}"\n`;
-      });
-      contextPrompt += "\nIMPORTANTE: NO repitas lo que ya dijiste. Si el cliente ya eligió el servicio, AVANZA hacia el agendamiento.\n";
+    if (history.length > 0) {
+      contextPrompt = formatHistoryForPrompt(history);
+      
+      // Añadir estadísticas de la conversación
+      const stats = await getHistoryStats(phone);
+      if (stats) {
+        contextPrompt += `\nESTADÍSTICAS:\n`;
+        contextPrompt += `- Mensajes totales: ${stats.totalMessages}\n`;
+        contextPrompt += `- Edad de conversación: ${stats.conversationAge} minutos\n`;
+        if (stats.lastIntent) {
+          contextPrompt += `- Última intención: ${stats.lastIntent}\n`;
+        }
+      }
     }
   }
   
+  // 2. AÑADIR CONTEXTO DEL ESTADO
   if (conversationContext) {
     contextPrompt += `\nCONTEXTO ADICIONAL:\n`;
     if (conversationContext.isHumanHandling) {
-      contextPrompt += `- Un humano acaba de manejar esta conversación\n`;
+      contextPrompt += `- ⚠️ Un humano acaba de manejar esta conversación\n`;
     }
     if (conversationContext.awaitingScheduling) {
-      contextPrompt += `- El cliente estaba en proceso de agendamiento\n`;
+      contextPrompt += `- 📅 El cliente estaba en proceso de agendamiento\n`;
     }
     if (conversationContext.lastIntent) {
-      contextPrompt += `- Última intención detectada: ${conversationContext.lastIntent}\n`;
+      contextPrompt += `- 🎯 Última intención detectada: ${conversationContext.lastIntent}\n`;
     }
     if (conversationContext.servicePreference) {
       const label = conversationContext.servicePreference === 'therapy'
         ? 'terapia psicológica'
         : 'consulta psiquiátrica';
-      contextPrompt += `- El cliente indicó interés en ${label}\n`;
+      contextPrompt += `- ✅ El cliente indicó interés en ${label}\n`;
     }
   }
 
   try {
+    // 3. GENERAR RESPUESTA CON CONTEXTO COMPLETO
     const { prompt: businessPrompt, versionTag, source } = await getPromptConfig();
     const input = buildPrompt({ businessPrompt, contextPrompt, text });
 
@@ -75,15 +83,12 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       contents: [{ parts: [{ text: input }] }],
     });
     
-    // Limpieza inicial: remover bloques de código
     let out = result.response.text().trim();
     out = out.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
 
-    // Separar respuesta y JSON
     const lines = out.split("\n");
     let rawJson = lines[lines.length - 1];
     
-    // Buscar el JSON y eliminarlo de las líneas del mensaje
     let jsonFound = false;
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].trim().startsWith("{") && lines[i].includes('"intent"')) {
@@ -96,7 +101,6 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     
     let message = lines.join("\n").trim();
 
-    // 1. Parsear JSON con fallback
     let meta = {
       intent: "info",
       priority: "low",
@@ -106,13 +110,11 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       confidence: 0.6,
     };
     
-    // ... (Tu lógica de parseo de JSON se mantiene aquí para asegurar la extracción)
     try {
       const cleanJson = rawJson.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       meta = JSON.parse(cleanJson);
     } catch (parseError) {
       console.error("❌ Error parseando JSON de IA:", parseError.message);
-      // Fallback manual de extracción de meta
       try {
         const intentMatch = rawJson.match(/"intent"\s*:\s*"([^"]+)"/);
         const priorityMatch = rawJson.match(/"priority"\s*:\s*"([^"]+)"/);
@@ -128,10 +130,10 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       }
     }
 
-    // 2. CORRECCIÓN CRÍTICA: Fallback de mensaje si la IA solo envió JSON
+    // CORRECCIÓN: Fallback de mensaje si está vacío
     const MIN_MESSAGE_LENGTH = 4;
     if (!message || message.length < MIN_MESSAGE_LENGTH) {
-      console.warn(`⚠️ Mensaje de IA vacío o muy corto (${message.length} chars). Generando fallback conversacional.`);
+      console.warn(`⚠️ Mensaje de IA vacío o muy corto. Generando fallback conversacional.`);
       
       switch (meta.intent) {
         case 'agendar':
@@ -147,24 +149,18 @@ export async function generateAIReply({ text, conversationContext = null, phone 
         case 'despedida':
           message = "Gracias por contactarnos. ¡Que tengas un excelente día! 😊";
           break;
-        case 'saludo':
-        case 'info':
         default:
           message = "Hola, soy el asistente de Feliz Horizonte. ¿En qué puedo ayudarte hoy? 😊";
           break;
       }
       
-      // Si el mensaje estaba vacío, forzamos un intent básico
       if (meta.intent === 'saludo' || meta.intent === 'despedida' || meta.intent === 'error') {
         meta.intent = 'info';
         meta.confidence = 0.5;
       }
     }
     
-    // ... (Tu lógica de detección manual y overrides se mantiene)
-    
     // Detección manual de servicio si la IA falló
-    // ... [Se mantiene tu lógica de override]
     if (!meta.service || meta.service === 'null') {
       const textLower = text.toLowerCase();
       if (/(psicolog[íi]a|psic[óo]log[oa]|terapia|terapeuta)/i.test(textLower)) {
@@ -210,18 +206,23 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       console.log(`⚠️ Solicitud urgente detectada: "${text}"`);
     }
 
-    // Guardar en historial... (se mantiene tu lógica de historial)
+    // 4. GUARDAR EN HISTORIAL PERSISTENTE
     if (phone) {
-      if (!conversationHistory.has(phone)) {
-        conversationHistory.set(phone, []);
-      }
-      const history = conversationHistory.get(phone);
-      history.push({ role: 'user', text, timestamp: Date.now() });
-      history.push({ role: 'assistant', text: message, timestamp: Date.now() });
-      
-      if (history.length > 10) {
-        history.splice(0, history.length - 10);
-      }
+      await saveMessage({
+        phone,
+        role: 'user',
+        content: text,
+        intent: null,
+        service: meta.service
+      });
+
+      await saveMessage({
+        phone,
+        role: 'assistant',
+        content: message,
+        intent: meta.intent,
+        service: meta.service
+      });
     }
 
     console.log(`📊 Meta final:`, JSON.stringify(meta));
@@ -229,7 +230,6 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     return { message, meta };
   } catch (e) {
     console.error("❌ AI error:", e?.message);
-    // [Tu fallback por error de conexión se mantiene]
     return {
       message:
         "Gracias por escribirnos 😊 En este momento estoy teniendo dificultades técnicas. Un miembro de mi equipo te atenderá en breve.",
@@ -316,30 +316,4 @@ export async function synthesizeAudioFromText(text, { promptPrefix = null } = {}
     console.error("❌ Error generando audio:", err?.message);
     throw err;
   }
-}
-
-// Función para limpiar historial viejo
-export function cleanOldConversations() {
-  const now = Date.now();
-  const ONE_HOUR = 60 * 60 * 1000;
-  
-  for (const [phone, history] of conversationHistory.entries()) {
-    if (history.length === 0) {
-      conversationHistory.delete(phone);
-      continue;
-    }
-    
-    const lastMessage = history[history.length - 1];
-    if (now - lastMessage.timestamp > ONE_HOUR) {
-      conversationHistory.delete(phone);
-      console.log(`🧹 Historial limpiado para ${phone}`);
-    }
-  }
-}
-
-setInterval(cleanOldConversations, 30 * 60 * 1000);
-
-export function resetConversationHistory(phone) {
-  conversationHistory.delete(phone);
-  console.log(`🔄 Historial reseteado para ${phone}`);
 }
