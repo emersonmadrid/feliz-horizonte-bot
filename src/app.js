@@ -159,7 +159,7 @@ function quickAnswers(text, conversationContext = null) {
 
   if (/(horario|atienden|atenci[oó]n|abren|disponibilidad)/.test(t) &&
     !/(agendar|cita|reservar)/.test(t)) {
-    return "Horarios:\n• L–V: 9:00–20:00\n• Sáb: 9:00–14:00\nDomingo cerrado.\n¿Deseas agendar?";
+    return "Horarios:\n• L–V: 9:00–21:00\n• Sáb: 9:00–21:00\nDomingo 9:00–18:00.\n¿Deseas agendar?";
   }
 
   if (/(pago|pagar|yape|plin|transfer)/.test(t) &&
