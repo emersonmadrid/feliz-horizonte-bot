@@ -161,6 +161,14 @@ curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 
 ## 7. Verificación
 
+### Ejecutar pruebas locales
+
+Para validar utilidades y sanitización de prompts antes de desplegar:
+
+```bash
+npm test
+```
+
 ### Health check
 
 ```bash

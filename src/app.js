@@ -13,6 +13,7 @@ import {
   listActiveConversations,
   mergeConversationState,
 } from "./services/state.service.js";
+import { buildHealthPayload, getBotMode } from "./utils/health.utils.js";
 
 dotenv.config();
 const app = express();
@@ -39,6 +40,40 @@ const ENABLE_AUDIO_RESPONSES = (process.env.WHATSAPP_AUDIO_RESPONSES ?? "0") ===
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const USE_WEBHOOK = VERCEL === "1" && VERCEL_ENV === "production" && PUBLIC_URL;
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !USE_WEBHOOK });
+
+async function checkSupabaseConnection() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return { ok: false, error: "Faltan credenciales de Supabase" };
+  }
+
+  try {
+    const { error } = await supabase
+      .from("fh_topics")
+      .select("id", { head: true, count: "exact" })
+      .limit(1);
+
+    if (error) {
+      return { ok: false, error: error.message };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+async function checkTelegramConnection() {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return { ok: false, error: "Falta TELEGRAM_BOT_TOKEN" };
+  }
+
+  try {
+    const me = await bot.getMe();
+    return { ok: true, username: me?.username, id: me?.id };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
 
 // Configuración webhook
 if (USE_WEBHOOK) {
@@ -781,6 +816,22 @@ if (!USE_WEBHOOK) {
 }
 
 // HTTP ENDPOINTS
+
+app.get("/health", async (_req, res) => {
+  const [supabaseStatus, telegramStatus] = await Promise.all([
+    checkSupabaseConnection(),
+    checkTelegramConnection(),
+  ]);
+
+  const payload = buildHealthPayload({
+    supabaseStatus,
+    telegramStatus,
+    mode: getBotMode(USE_WEBHOOK),
+    extra: { timestamp: new Date().toISOString() },
+  });
+
+  res.status(payload.ok ? 200 : 503).json(payload);
+});
 
 app.get("/", (_req, res) => {
   res.json({

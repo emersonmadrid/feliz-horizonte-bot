@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node src/webapp.js"
+    "dev": "node src/webapp.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -14,5 +15,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "node-telegram-bot-api": "^0.66.0"
+  },
+  "devDependencies": {
+    "vitest": "file:./vendor/vitest"
   }
 }

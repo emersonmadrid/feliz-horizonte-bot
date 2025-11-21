@@ -4,9 +4,10 @@ dotenv.config();
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getPromptConfig } from "../prompts/prompt-loader.js";
+import { buildPrompt, sanitizeGeminiApiKey } from "../utils/ai.utils.js";
 
 const RAW_KEY = process.env.GEMINI_API_KEY || "";
-const API_KEY = RAW_KEY.trim().replace(/^["']+|["']+$/g, "");
+const API_KEY = sanitizeGeminiApiKey(RAW_KEY);
 
 if (!API_KEY || !API_KEY.startsWith("AIza")) {
   console.error("❌ GEMINI_API_KEY inválida o vacía. Revisa tu .env");
@@ -66,7 +67,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
 
   try {
     const { prompt: businessPrompt, versionTag, source } = await getPromptConfig();
-    const input = `${businessPrompt}${contextPrompt}\n\nMensaje actual del cliente:\n"${text}"\n\nRespuesta:`;
+    const input = buildPrompt({ businessPrompt, contextPrompt, text });
 
     console.log(`🧠 Generando respuesta (prompt v=${versionTag}, source=${source}) para ${phone || 'desconocido'}`);
 
