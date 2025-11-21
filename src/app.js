@@ -6,6 +6,13 @@ import FormData from "form-data";
 import { createClient } from "@supabase/supabase-js";
 import TelegramBot from "node-telegram-bot-api";
 import { generateAIReply, synthesizeAudioFromText, transcribeAudioBuffer } from "./services/ai.service.js";
+import {
+  deleteConversationState,
+  getConversationState,
+  getStateMetrics,
+  listActiveConversations,
+  mergeConversationState,
+} from "./services/state.service.js";
 
 dotenv.config();
 const app = express();
@@ -73,37 +80,6 @@ const timeoutWarnings = new Map(); // Almacenar timeouts de advertencia
 
 const phoneToTopic = new Map();
 const topicToPhone = new Map();
-
-// Control de conversaciones activas
-const activeConversations = new Map();
-
-const DEFAULT_CONVERSATION_STATE = {
-  lastMessageTime: 0,
-  isHumanHandling: false,
-  awaitingScheduling: false,
-  lastIntent: null,
-  context: null,
-  buttonsSent: false,
-  servicePreference: null,
-};
-
-function ensureConversationState(phone) {
-  if (!activeConversations.has(phone)) {
-    activeConversations.set(phone, { ...DEFAULT_CONVERSATION_STATE });
-  }
-  return activeConversations.get(phone);
-}
-
-function mergeConversationState(phone, updates = {}) {
-  const current = ensureConversationState(phone);
-  const next = { ...current, ...updates };
-  activeConversations.set(phone, next);
-  return next;
-}
-
-function getConversationState(phone) {
-  return activeConversations.get(phone) || null;
-}
 
 const SERVICE_BUTTON_IDS = {
   therapy: "FH_SERVICE_THERAPY",
@@ -383,11 +359,11 @@ function scheduleTimeoutWarning(phone) {
     }
 
     setTimeout(async () => {
-      const conversationContext = getConversationState(phone);
+      const conversationContext = await getConversationState(phone);
       const timeSinceLastMessage = Date.now() - (conversationContext?.lastMessageTime || 0);
 
       if (conversationContext?.isHumanHandling && timeSinceLastMessage >= HUMAN_TIMEOUT) {
-        mergeConversationState(phone, {
+        await mergeConversationState(phone, {
           isHumanHandling: false,
           awaitingScheduling: false
         });
@@ -571,7 +547,7 @@ async function handleCallbackQuery(query) {
     if (data.startsWith('release_')) {
       const phone = data.replace('release_', '');
 
-      mergeConversationState(phone, {
+      await mergeConversationState(phone, {
         isHumanHandling: false,
         awaitingScheduling: false,
         lastMessageTime: Date.now()
@@ -602,7 +578,7 @@ async function handleCallbackQuery(query) {
     else if (data.startsWith('keep_')) {
       const phone = data.replace('keep_', '');
 
-      mergeConversationState(phone, {
+      await mergeConversationState(phone, {
         isHumanHandling: true,
         lastMessageTime: Date.now()
       });
@@ -658,7 +634,7 @@ bot.onText(/^\/auto$/i, async (msg) => {
     );
   }
 
-  mergeConversationState(phone, {
+  await mergeConversationState(phone, {
     isHumanHandling: false,
     awaitingScheduling: false,
     lastMessageTime: Date.now()
@@ -694,7 +670,7 @@ bot.onText(/^\/estado$/i, async (msg) => {
     );
   }
 
-  const context = getConversationState(phone);
+  const context = await getConversationState(phone);
   const timeSinceLastMessage = context?.lastMessageTime
     ? Math.floor((Date.now() - context.lastMessageTime) / 60000)
     : 'N/A';
@@ -771,11 +747,11 @@ if (!USE_WEBHOOK) {
         return;
       }
 
-      mergeConversationState(phone, {
-        lastMessageTime: Date.now(),
-        isHumanHandling: true,
-        awaitingScheduling: false
-      });
+          await mergeConversationState(phone, {
+            lastMessageTime: Date.now(),
+            isHumanHandling: true,
+            awaitingScheduling: false
+          });
 
       await sendWhatsAppText(phone, text);
       await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
@@ -973,7 +949,7 @@ app.post("/telegram/webhook", async (req, res) => {
         console.log(`   Hacia número: ${phone}`);
         console.log(`   Mensaje: "${text}"`);
 
-        mergeConversationState(phone, {
+        await mergeConversationState(phone, {
           lastMessageTime: Date.now(),
           isHumanHandling: true,
           awaitingScheduling: false
@@ -1048,7 +1024,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const from = msg.from;
     const audioPayload = msg.audio || msg.voice || null;
     let text = (msg.text?.body || audioPayload?.caption || "").trim();
-    let conversationContext = getConversationState(from);
+    let conversationContext = await getConversationState(from);
     let audioTranscriptionInfo = null;
 
     const interactive = msg?.interactive;
@@ -1109,7 +1085,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
       if (selectedService) {
         console.log(`🎯 Botón seleccionado (${selectedService}) por ${from}`);
-        conversationContext = mergeConversationState(from, { servicePreference: selectedService });
+        conversationContext = await mergeConversationState(from, { servicePreference: selectedService });
       }
     }
 
@@ -1125,7 +1101,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       : Infinity;
 
     if (!conversationContext) {
-      conversationContext = ensureConversationState(from);
+      conversationContext = await mergeConversationState(from, {});
     }
 
     let justSentButtons = false;
@@ -1133,7 +1109,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     if (!conversationContext.buttonsSent) {
       try {
         await sendWhatsAppButtons(from);
-        conversationContext = mergeConversationState(from, { buttonsSent: true });
+        conversationContext = await mergeConversationState(from, { buttonsSent: true });
         justSentButtons = true;
       } catch (err) {
         console.error("❌ Error enviando botones de bienvenida:", err?.response?.data || err.message);
@@ -1142,7 +1118,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     if (justSentButtons && !buttonSelection) {
       console.log(`⏸️ Botones enviados a ${from}, esperando selección antes de responder con IA`);
-      mergeConversationState(from, {
+      await mergeConversationState(from, {
         lastMessageTime: Date.now(),
         context: text,
       });
@@ -1160,13 +1136,13 @@ app.post("/webhook/whatsapp", async (req, res) => {
       conversationContext.isHumanHandling = false;
     }
 
-   // Refrescar contexto antes de verificar (por si el botón lo cambió)
-conversationContext = getConversationState(from) || conversationContext;
+    // Refrescar contexto antes de verificar (por si el botón lo cambió)
+    conversationContext = (await getConversationState(from)) || conversationContext;
 
-console.log(`🔍 Estado actual para ${from}:`, {
-  isHumanHandling: conversationContext?.isHumanHandling,
-  timeSinceLastMessage: Math.floor(timeSinceLastMessage / 1000) + 's'
-}); 
+    console.log(`🔍 Estado actual para ${from}:`, {
+      isHumanHandling: conversationContext?.isHumanHandling,
+      timeSinceLastMessage: Math.floor(timeSinceLastMessage / 1000) + 's'
+    });
     // Emergencia
     const isEmergency = emergencyKeywords.some(k => text.toLowerCase().includes(k));
     if (isEmergency) {
@@ -1176,7 +1152,7 @@ console.log(`🔍 Estado actual para ${from}:`, {
       await notifyTelegram("🚨 EMERGENCIA DETECTADA", [incomingTelegramLine, "⚠️ Protocolo enviado. IA bloqueada."], from);
       await saveMeta({ phone: from, emergency: true, required_human: true });
 
-      mergeConversationState(from, {
+      await mergeConversationState(from, {
         lastMessageTime: Date.now(),
         isHumanHandling: true,
         awaitingScheduling: false
@@ -1194,7 +1170,7 @@ console.log(`🔍 Estado actual para ${from}:`, {
       await notifyTelegram("✅ Respondido automático (Quick)", [incomingTelegramLine], from);
       await saveMeta({ phone: from });
 
-      mergeConversationState(from, {
+      await mergeConversationState(from, {
         lastMessageTime: Date.now(),
         isHumanHandling: false,
         awaitingScheduling: false
@@ -1203,22 +1179,22 @@ console.log(`🔍 Estado actual para ${from}:`, {
       return res.sendStatus(200);
     }
 
-// Si un humano está manejando, NO responder con IA
-if (conversationContext?.isHumanHandling) {
-  console.log(`👤 Conversación en modo HUMANO para ${from}, solo notificando...`);
-  await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [incomingTelegramLine], from);
-  await saveMeta({ phone: from, required_human: true });
+    // Si un humano está manejando, NO responder con IA
+    if (conversationContext?.isHumanHandling) {
+      console.log(`👤 Conversación en modo HUMANO para ${from}, solo notificando...`);
+      await notifyTelegram("💬 NUEVO MENSAJE (en conversación activa)", [incomingTelegramLine], from);
+      await saveMeta({ phone: from, required_human: true });
 
-  // Actualizar timestamp
-  mergeConversationState(from, {
-    lastMessageTime: Date.now()
-  });
+      // Actualizar timestamp
+      await mergeConversationState(from, {
+        lastMessageTime: Date.now()
+      });
 
-  return res.sendStatus(200);
-}
+      return res.sendStatus(200);
+    }
 
-// Si llegamos aquí, la IA puede responder
-console.log(`🤖 IA habilitada para ${from}, consultando...`);
+    // Si llegamos aquí, la IA puede responder
+    console.log(`🤖 IA habilitada para ${from}, consultando...`);
 
     // IA (Gemini)
     console.log(`🤖 Consultando IA para mensaje de ${from}`);
@@ -1268,7 +1244,7 @@ console.log(`🤖 IA habilitada para ${from}, consultando...`);
     // Actualizar contexto de conversación
     const isSchedulingIntent = ['agendar', 'scheduling', 'appointment'].includes(meta?.intent);
 
-    mergeConversationState(from, {
+    await mergeConversationState(from, {
       lastMessageTime: Date.now(),
       isHumanHandling: requiresHuman,
       awaitingScheduling: !requiresHuman && isSchedulingIntent,
@@ -1319,7 +1295,7 @@ app.post("/admin/reset-conversation", async (req, res) => {
     return res.status(403).json({ error: "No autorizado" });
   }
 
-  activeConversations.delete(phone);
+  await deleteConversationState(phone);
 
   return res.json({
     success: true,
@@ -1335,22 +1311,33 @@ app.get("/admin/active-conversations", async (req, res) => {
     return res.status(403).json({ error: "No autorizado" });
   }
 
-  const conversations = [];
   const now = Date.now();
-
-  for (const [phone, context] of activeConversations.entries()) {
-    conversations.push({
-      phone,
-      isHumanHandling: context.isHumanHandling,
-      awaitingScheduling: context.awaitingScheduling,
-      lastIntent: context.lastIntent,
-      minutesSinceLastMessage: Math.floor((now - context.lastMessageTime) / 60000)
-    });
-  }
+  const conversations = (await listActiveConversations()).map(({ phone, state, updatedAt }) => ({
+    phone,
+    isHumanHandling: state.isHumanHandling,
+    awaitingScheduling: state.awaitingScheduling,
+    lastIntent: state.lastIntent,
+    minutesSinceLastMessage: Math.floor((now - (state.lastMessageTime || updatedAt)) / 60000)
+  }));
 
   return res.json({
     total: conversations.length,
+    metrics: getStateMetrics(),
     conversations
+  });
+});
+
+app.get("/admin/state-metrics", async (req, res) => {
+  const { admin_key } = req.query;
+
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  await listActiveConversations();
+
+  return res.json({
+    ...getStateMetrics(),
   });
 });
 
