@@ -35,7 +35,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
   
   if (phone && conversationHistory.has(phone)) {
     const history = conversationHistory.get(phone);
-    const recentMessages = history.slice(-4);
+    const recentMessages = history.slice(-10);
     
     if (recentMessages.length > 0) {
       contextPrompt = "\n\nCONTEXTO DE CONVERSACIÓN PREVIA:\n";
