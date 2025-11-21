@@ -154,7 +154,7 @@ function quickAnswers(text, conversationContext = null) {
 
   if (/(precio|cu[aá]nto cuesta|cuanto|tarifa|costo)/.test(t) &&
     !/(agendar|cita|reservar)/.test(t)) {
-    return "Nuestros precios:\n• Terapia psicológica: S/ 80 (50 min, Presencial/Online)\n• Consulta psiquiátrica: S/ 139 (online)\n¿Te gustaría agendar una cita?";
+    return "Nuestros precios:\n• Terapia psicológica: S/ 85 (50 min, Presencial/Online)\n• Consulta psiquiátrica: S/ 139 (online)\n¿Te gustaría agendar una cita?";
   }
 
   if (/(horario|atienden|atenci[oó]n|abren|disponibilidad)/.test(t) &&
