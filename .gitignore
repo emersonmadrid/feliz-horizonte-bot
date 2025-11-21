@@ -1,6 +1,36 @@
+# Dependencies
 node_modules/
+
+# Environment variables
 .env
+.env.local
 .env.production
+.env.development
+
+# Vercel
 .vercel
+
+# macOS
 .DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archives
+*.zip
+*.tar.gz
+
+# Temporal files
 src.zip
+topicMap.json
+
+# Build outputs
+dist/
+build/

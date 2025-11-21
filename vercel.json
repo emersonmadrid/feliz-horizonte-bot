@@ -1,9 +1,12 @@
 {
   "version": 2,
-  "builds": [{ "src": "src/app.js", "use": "@vercel/node" }],
+  "builds": [
+    { "src": "src/app.js", "use": "@vercel/node" }
+  ],
   "routes": [
-    { "src": "/telegram/webhook", "dest": "src/app.js" },
-    { "src": "/webhook/whatsapp", "dest": "src/app.js" },
     { "src": "/(.*)", "dest": "src/app.js" }
-  ]
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
 }
