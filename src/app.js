@@ -218,9 +218,15 @@ async function sendWhatsAppButtons(to) {
   console.log(`✅ Botones enviados a ${to}`);
 }
 
+function guessFilenameFromMime(mediaId, mimeType, fallbackPrefix = "file") {
+  const safeId = mediaId || Date.now();
+  const extension = (mimeType?.split("/")[1] || "bin").split(";")[0];
+  return `${fallbackPrefix}-${safeId}.${extension}`;
+}
+
 async function downloadWhatsAppMedia(mediaId) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    throw new Error("No hay credenciales de la API de WhatsApp para descargar audio");
+    throw new Error("No hay credenciales de la API de WhatsApp para descargar archivos");
   }
   if (!mediaId) {
     throw new Error("mediaId no proporcionado");
@@ -232,7 +238,7 @@ async function downloadWhatsAppMedia(mediaId) {
   const metaResponse = await axios.get(metaUrl, { headers: baseHeaders });
   const mediaUrl = metaResponse?.data?.url;
   if (!mediaUrl) {
-    throw new Error("No se recibió una URL para el audio");
+    throw new Error("No se recibió una URL para el recurso multimedia");
   }
 
   const fileResponse = await axios.get(mediaUrl, {
@@ -240,11 +246,14 @@ async function downloadWhatsAppMedia(mediaId) {
     responseType: "arraybuffer",
   });
 
+  const mimeType = metaResponse?.data?.mime_type || fileResponse.headers["content-type"] || "application/octet-stream";
+
   return {
     buffer: Buffer.from(fileResponse.data),
-    mimeType: metaResponse?.data?.mime_type || fileResponse.headers["content-type"] || "audio/ogg",
+    mimeType,
     sha256: metaResponse?.data?.sha256 || null,
     mediaId,
+    filename: guessFilenameFromMime(mediaId, mimeType),
   };
 }
 
@@ -276,14 +285,14 @@ async function transcribeWhatsAppAudio(msg) {
   };
 }
 
-async function uploadWhatsAppAudio(buffer, mimeType = "audio/mpeg") {
+async function uploadWhatsAppMedia(buffer, mimeType = "application/octet-stream", filename = null) {
   if (!buffer || !buffer.length) {
-    throw new Error("Buffer de audio vacío");
+    throw new Error("Buffer de archivo vacío");
   }
 
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`📱 [SIMULADO] Subir audio (${mimeType}) - ${buffer.length} bytes`);
-    return { id: "simulated-audio-id" };
+    console.log(`📱 [SIMULADO] Subir archivo (${mimeType}) - ${buffer.length} bytes`);
+    return { id: "simulated-media-id" };
   }
 
   const uploadUrl = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/media`;
@@ -294,7 +303,7 @@ async function uploadWhatsAppAudio(buffer, mimeType = "audio/mpeg") {
     "file",
     buffer,
     {
-      filename: `voz-${Date.now()}.${mimeType.split("/")[1] || "mp3"}`,
+      filename: filename || guessFilenameFromMime("media", mimeType),
       contentType: mimeType,
     }
   );
@@ -308,6 +317,10 @@ async function uploadWhatsAppAudio(buffer, mimeType = "audio/mpeg") {
   });
 
   return response?.data;
+}
+
+async function uploadWhatsAppAudio(buffer, mimeType = "audio/mpeg") {
+  return uploadWhatsAppMedia(buffer, mimeType, `voz-${Date.now()}.${mimeType.split("/")[1] || "mp3"}`);
 }
 
 async function sendWhatsAppAudioMessage(to, audioBuffer, mimeType = "audio/mpeg") {
@@ -345,6 +358,77 @@ async function sendWhatsAppAudioMessage(to, audioBuffer, mimeType = "audio/mpeg"
   console.log(`🎧 Audio enviado a ${to}`);
 }
 
+async function sendWhatsAppDocument(to, buffer, mimeType = "application/octet-stream", filename = "archivo", caption = "") {
+  if (!buffer || !buffer.length) {
+    throw new Error("Archivo vacío para enviar");
+  }
+
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Documento WhatsApp → ${to} (${mimeType}, ${buffer.length} bytes)`);
+    return;
+  }
+
+  const upload = await uploadWhatsAppMedia(buffer, mimeType, filename);
+  const mediaId = upload?.id;
+
+  if (!mediaId) {
+    throw new Error("No se obtuvo mediaId al subir el documento");
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "document",
+      document: {
+        id: mediaId,
+        filename: filename,
+        caption: caption || undefined,
+      },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+
+  console.log(`📎 Documento enviado a ${to}`);
+}
+
+async function sendWhatsAppImage(to, buffer, mimeType = "image/jpeg", caption = "") {
+  if (!buffer || !buffer.length) {
+    throw new Error("Imagen vacía para enviar");
+  }
+
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Imagen WhatsApp → ${to} (${mimeType}, ${buffer.length} bytes)`);
+    return;
+  }
+
+  const upload = await uploadWhatsAppMedia(buffer, mimeType, `imagen-${Date.now()}.${mimeType.split("/")[1] || "jpg"}`);
+  const mediaId = upload?.id;
+
+  if (!mediaId) {
+    throw new Error("No se obtuvo mediaId al subir la imagen");
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "image",
+      image: {
+        id: mediaId,
+        caption,
+      },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+
+  console.log(`🖼️ Imagen enviada a ${to}`);
+}
+
 async function sendVoiceNoteIfEnabled(to, text, source = "ai") {
   if (!ENABLE_AUDIO_RESPONSES) return;
 
@@ -358,6 +442,59 @@ async function sendVoiceNoteIfEnabled(to, text, source = "ai") {
   } catch (err) {
     console.error(`⚠️ Error enviando audio (${source}):`, err?.response?.data || err.message);
   }
+}
+
+async function forwardMediaToTelegram({ phone, buffer, mimeType, caption = "", filename }) {
+  if (!PANEL_CHAT_ID && !ADMIN) {
+    console.log("⚠️ No hay chat configurado para reenviar archivos a Telegram");
+    return;
+  }
+
+  const topicId = await ensureTopicForPhone(phone);
+  const chatId = PANEL_CHAT_ID || ADMIN;
+  const sendOptions = { caption, message_thread_id: topicId };
+  const fileOptions = { filename: filename || guessFilenameFromMime("wa", mimeType), contentType: mimeType };
+
+  try {
+    if ((mimeType || "").startsWith("image/")) {
+      await bot.sendPhoto(chatId, buffer, sendOptions, fileOptions);
+    } else {
+      await bot.sendDocument(chatId, buffer, sendOptions, fileOptions);
+    }
+    console.log(`📎 Archivo reenviado a Telegram (topic ${topicId})`);
+  } catch (err) {
+    console.error("❌ Error reenviando archivo a Telegram:", err?.message);
+  }
+}
+
+async function downloadTelegramFile(fileId) {
+  const url = await bot.getFileLink(fileId);
+  const response = await axios.get(url, { responseType: "arraybuffer" });
+
+  return {
+    buffer: Buffer.from(response.data),
+    mimeType: response.headers["content-type"] || "application/octet-stream",
+  };
+}
+
+async function forwardTelegramMediaToWhatsApp({ msg, phone }) {
+  const caption = (msg.caption || "").trim();
+
+  if (msg.document) {
+    const { buffer, mimeType } = await downloadTelegramFile(msg.document.file_id);
+    const filename = msg.document.file_name || guessFilenameFromMime("tg", mimeType);
+    await sendWhatsAppDocument(phone, buffer, mimeType, filename, caption);
+    return { type: "document", caption };
+  }
+
+  if (msg.photo?.length) {
+    const photo = msg.photo[msg.photo.length - 1];
+    const { buffer, mimeType } = await downloadTelegramFile(photo.file_id);
+    await sendWhatsAppImage(phone, buffer, mimeType || "image/jpeg", caption);
+    return { type: "photo", caption };
+  }
+
+  return null;
 }
 
 function escapeHTML(s = "") {
@@ -732,10 +869,11 @@ if (!USE_WEBHOOK) {
       if (!msg.message_thread_id) return;
       if (msg.from?.is_bot) return;
 
-      const text = (msg.text || "").trim();
-      if (!text || text.startsWith("/")) return;
+      const hasMedia = Boolean(msg.document || (msg.photo?.length));
+      const text = (msg.text || msg.caption || "").trim();
+      if (!hasMedia && (!text || text.startsWith("/"))) return;
 
-      if (containsOffensiveLanguage(text)) {
+      if (text && containsOffensiveLanguage(text)) {
         console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO de ${msg.from.username || msg.from.first_name}`);
         await bot.sendMessage(PANEL_CHAT_ID,
           `⚠️ <b>MENSAJE BLOQUEADO</b>\n\n` +
@@ -782,15 +920,24 @@ if (!USE_WEBHOOK) {
         return;
       }
 
-          await mergeConversationState(phone, {
-            lastMessageTime: Date.now(),
-            isHumanHandling: true,
-            awaitingScheduling: false
-          });
+      const mediaForwarded = hasMedia
+        ? await forwardTelegramMediaToWhatsApp({ msg, phone })
+        : null;
 
-      await sendWhatsAppText(phone, text);
-      await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
-      console.log(`✅ TG → WA | topic ${topicId} → ${phone}`);
+      await mergeConversationState(phone, {
+        lastMessageTime: Date.now(),
+        isHumanHandling: true,
+        awaitingScheduling: false
+      });
+
+      if (mediaForwarded) {
+        await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        console.log(`✅ TG → WA archivo | topic ${topicId} → ${phone}`);
+      } else {
+        await sendWhatsAppText(phone, text);
+        await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        console.log(`✅ TG → WA | topic ${topicId} → ${phone}`);
+      }
 
       // Programar timeout automático
       scheduleTimeoutWarning(phone);
@@ -924,7 +1071,8 @@ app.post("/telegram/webhook", async (req, res) => {
     }
 
     const chatId = String(msg.chat?.id);
-    const text = (msg.text || "").trim();
+    const hasMedia = Boolean(msg.document || (msg.photo?.length));
+    const text = (msg.text || msg.caption || "").trim();
     const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
     const fromUser = msg.from?.username || msg.from?.first_name || "Unknown";
     const isBot = msg.from?.is_bot || false;
@@ -940,13 +1088,13 @@ app.post("/telegram/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    if (text.startsWith("/")) {
+    if (!hasMedia && text.startsWith("/")) {
       console.log(`🤖 Comando detectado: ${text}`);
       return res.sendStatus(200);
     }
 
-    if (chatId === PANEL_CHAT_ID && topicId && text) {
-      if (containsOffensiveLanguage(text)) {
+    if (chatId === PANEL_CHAT_ID && topicId && (text || hasMedia)) {
+      if (text && containsOffensiveLanguage(text)) {
         console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
         await bot.sendMessage(PANEL_CHAT_ID,
           `⚠️ <b>MENSAJE BLOQUEADO</b>\n\n` +
@@ -1000,14 +1148,22 @@ app.post("/telegram/webhook", async (req, res) => {
         console.log(`   Hacia número: ${phone}`);
         console.log(`   Mensaje: "${text}"`);
 
+        const mediaForwarded = hasMedia
+          ? await forwardTelegramMediaToWhatsApp({ msg, phone })
+          : null;
+
         await mergeConversationState(phone, {
           lastMessageTime: Date.now(),
           isHumanHandling: true,
           awaitingScheduling: false
         });
 
-        await sendWhatsAppText(phone, text);
-        await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        if (mediaForwarded) {
+          await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        } else {
+          await sendWhatsAppText(phone, text);
+          await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        }
 
         console.log(`✅ Mensaje reenviado exitosamente`);
 
@@ -1074,7 +1230,9 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     const from = msg.from;
     const audioPayload = msg.audio || msg.voice || null;
-    let text = (msg.text?.body || audioPayload?.caption || "").trim();
+    const documentPayload = msg.document || null;
+    const imagePayload = msg.image || null;
+    let text = (msg.text?.body || audioPayload?.caption || documentPayload?.caption || imagePayload?.caption || "").trim();
     let conversationContext = await getConversationState(from);
     let audioTranscriptionInfo = null;
 
@@ -1124,6 +1282,42 @@ app.post("/webhook/whatsapp", async (req, res) => {
         );
         return res.sendStatus(200);
       }
+    }
+
+    const mediaPayload = documentPayload || imagePayload;
+
+    if (mediaPayload) {
+      try {
+        const media = await downloadWhatsAppMedia(mediaPayload.id);
+        const caption = text || (documentPayload ? "📎 Documento enviado" : "🖼️ Imagen enviada");
+
+        await forwardMediaToTelegram({
+          phone: from,
+          buffer: media.buffer,
+          mimeType: media.mimeType,
+          caption,
+          filename: media.filename,
+        });
+
+        await notifyTelegram("📎 Archivo recibido por WhatsApp", [
+          caption || "(sin texto)",
+          `Tipo: ${media.mimeType}`,
+        ], from);
+
+        await sendWhatsAppText(from, "📑 Recibimos tu archivo. En breve lo revisaremos.");
+        await mergeConversationState(from, {
+          lastMessageTime: Date.now(),
+          isHumanHandling: true,
+          awaitingScheduling: false,
+        });
+      } catch (err) {
+        console.error("❌ Error procesando archivo entrante:", err?.response?.data || err.message);
+        await notifyTelegram("⚠️ Error al procesar archivo", [
+          `Motivo: ${err?.message || "Desconocido"}`,
+        ], from);
+      }
+
+      return res.sendStatus(200);
     }
 
     if (buttonSelection) {
