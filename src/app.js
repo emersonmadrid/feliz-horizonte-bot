@@ -429,6 +429,41 @@ async function sendWhatsAppImage(to, buffer, mimeType = "image/jpeg", caption = 
   console.log(`🖼️ Imagen enviada a ${to}`);
 }
 
+async function sendWhatsAppVideo(to, buffer, mimeType = "video/mp4", caption = "") {
+  if (!buffer || !buffer.length) {
+    throw new Error("Video vacío para enviar");
+  }
+
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Video WhatsApp → ${to} (${mimeType}, ${buffer.length} bytes)`);
+    return;
+  }
+
+  const upload = await uploadWhatsAppMedia(buffer, mimeType, `video-${Date.now()}.${mimeType.split("/")[1] || "mp4"}`);
+  const mediaId = upload?.id;
+
+  if (!mediaId) {
+    throw new Error("No se obtuvo mediaId al subir el video");
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "video",
+      video: {
+        id: mediaId,
+        caption: caption || undefined,
+      },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+
+  console.log(`🎬 Video enviado a ${to}`);
+}
+
 async function sendVoiceNoteIfEnabled(to, text, source = "ai") {
   if (!ENABLE_AUDIO_RESPONSES) return;
 
@@ -485,6 +520,12 @@ async function forwardTelegramMediaToWhatsApp({ msg, phone }) {
     const filename = msg.document.file_name || guessFilenameFromMime("tg", mimeType);
     await sendWhatsAppDocument(phone, buffer, mimeType, filename, caption);
     return { type: "document", caption };
+  }
+
+  if (msg.video) {
+    const { buffer, mimeType } = await downloadTelegramFile(msg.video.file_id);
+    await sendWhatsAppVideo(phone, buffer, mimeType || "video/mp4", caption);
+    return { type: "video", caption };
   }
 
   if (msg.photo?.length) {
@@ -869,7 +910,7 @@ if (!USE_WEBHOOK) {
       if (!msg.message_thread_id) return;
       if (msg.from?.is_bot) return;
 
-      const hasMedia = Boolean(msg.document || (msg.photo?.length));
+      const hasMedia = Boolean(msg.document || msg.video || (msg.photo?.length));
       const text = (msg.text || msg.caption || "").trim();
       if (!hasMedia && (!text || text.startsWith("/"))) return;
 
@@ -1071,7 +1112,7 @@ app.post("/telegram/webhook", async (req, res) => {
     }
 
     const chatId = String(msg.chat?.id);
-    const hasMedia = Boolean(msg.document || (msg.photo?.length));
+    const hasMedia = Boolean(msg.document || msg.video || (msg.photo?.length));
     const text = (msg.text || msg.caption || "").trim();
     const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
     const fromUser = msg.from?.username || msg.from?.first_name || "Unknown";
