@@ -224,6 +224,54 @@ function guessFilenameFromMime(mediaId, mimeType, fallbackPrefix = "file") {
   return `${fallbackPrefix}-${safeId}.${extension}`;
 }
 
+function guessMimeFromFilename(filename) {
+  if (!filename) return null;
+
+  const ext = filename.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "mp4":
+      return "video/mp4";
+    case "3gp":
+    case "3gpp":
+      return "video/3gpp";
+    case "pdf":
+      return "application/pdf";
+    case "doc":
+      return "application/msword";
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "ppt":
+      return "application/vnd.ms-powerpoint";
+    case "pptx":
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    case "xls":
+      return "application/vnd.ms-excel";
+    case "xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case "txt":
+      return "text/plain";
+    case "aac":
+      return "audio/aac";
+    case "mp3":
+      return "audio/mpeg";
+    case "ogg":
+      return "audio/ogg";
+    case "opus":
+      return "audio/opus";
+    case "amr":
+      return "audio/amr";
+    default:
+      return null;
+  }
+}
+
 async function downloadWhatsAppMedia(mediaId) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
     throw new Error("No hay credenciales de la API de WhatsApp para descargar archivos");
@@ -368,7 +416,8 @@ async function sendWhatsAppDocument(to, buffer, mimeType = "application/octet-st
     return;
   }
 
-  const upload = await uploadWhatsAppMedia(buffer, mimeType, filename);
+  const effectiveMimeType = mimeType || guessMimeFromFilename(filename) || "application/octet-stream";
+  const upload = await uploadWhatsAppMedia(buffer, effectiveMimeType, filename);
   const mediaId = upload?.id;
 
   if (!mediaId) {
@@ -502,13 +551,16 @@ async function forwardMediaToTelegram({ phone, buffer, mimeType, caption = "", f
   }
 }
 
-async function downloadTelegramFile(fileId) {
+async function downloadTelegramFile(fileId, preferredMimeType = null, filename = null) {
   const url = await bot.getFileLink(fileId);
   const response = await axios.get(url, { responseType: "arraybuffer" });
 
+  const headerMime = response.headers["content-type"] || null;
+  const guessedMime = preferredMimeType || guessMimeFromFilename(filename) || headerMime || "application/octet-stream";
+
   return {
     buffer: Buffer.from(response.data),
-    mimeType: response.headers["content-type"] || "application/octet-stream",
+    mimeType: guessedMime,
   };
 }
 
@@ -516,7 +568,11 @@ async function forwardTelegramMediaToWhatsApp({ msg, phone }) {
   const caption = (msg.caption || "").trim();
 
   if (msg.document) {
-    const { buffer, mimeType } = await downloadTelegramFile(msg.document.file_id);
+    const { buffer, mimeType } = await downloadTelegramFile(
+      msg.document.file_id,
+      msg.document.mime_type,
+      msg.document.file_name
+    );
     const filename = msg.document.file_name || guessFilenameFromMime("tg", mimeType);
     await sendWhatsAppDocument(phone, buffer, mimeType, filename, caption);
     return { type: "document", caption };
