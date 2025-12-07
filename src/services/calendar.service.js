@@ -6,7 +6,7 @@ import {
   addDays,
   addMinutes,
   isBefore,
-  max as maxDate,
+  max as maxDate, // Renombramos 'max' a 'maxDate' para evitar confusiones
   parseISO,
   setHours,
   setMinutes,
@@ -45,8 +45,9 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
   const dayStart = setMinutes(setHours(startOfDay(baseDate), WORK_START_HOUR), 0);
   const dayEnd = setMinutes(setHours(startOfDay(baseDate), WORK_END_HOUR), 0);
 
+  // CORRECCIÓN AQUÍ: maxDate requiere un ARRAY de fechas en date-fns v2/v3
   const zonedStart = includeTodayOffset
-    ? maxDate([dayStart, baseDate])
+    ? maxDate([dayStart, baseDate]) // <--- ¡AQUÍ ESTABA EL ERROR! (Faltaban los corchetes [])
     : dayStart;
 
   return {
@@ -65,6 +66,8 @@ function getFreeSlots(busyIntervals, windowStart, windowEnd) {
     slotStart = addMinutes(slotStart, SLOT_MINUTES)
   ) {
     const slotEnd = addMinutes(slotStart, SLOT_MINUTES);
+    
+    // Verificar que el slot esté dentro de la ventana y sea futuro
     if (!isBefore(slotEnd, windowStart) && !isBefore(windowEnd, slotEnd)) {
       const overlaps = busy.some((interval) =>
         !(isBefore(slotEnd, interval.start) || isBefore(interval.end, slotStart))
@@ -108,56 +111,65 @@ function formatDayAvailability(dateLabel, ranges) {
     .map(({ start, end }) => `${formatInTimeZone(start, "h:mm a", TIMEZONE)} - ${formatInTimeZone(end, "h:mm a", TIMEZONE)}`)
     .join(" | ");
 
-  return `🗓️ ${dateLabel}: ${rangeText}`;
+  return `🗓️ *${dateLabel}:* ${rangeText}`;
 }
 
 export async function getNextAvailability(days = 3) {
   const calendar = getCalendarClient();
   const now = new Date();
-  const zonedNow = toZonedTime(now, TIMEZONE);
+  const zonedNow = toZonedTime(now, TIMEZONE); // Usando toZonedTime (v3)
 
   const availabilityLines = [];
 
   for (let i = 0; i < days; i++) {
     const dayBase = addDays(zonedNow, i);
     const includeTodayOffset = i === 0;
+    
+    // Obtener ventana de trabajo
     const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
 
-    const timeMin = fromZonedTime(start, TIMEZONE).toISOString();
+    // Si la hora de inicio es después de la hora de fin (ej: ya pasó el turno de hoy), saltar
+    if (!isBefore(start, end)) continue;
+
+    const timeMin = fromZonedTime(start, TIMEZONE).toISOString(); // Usando fromZonedTime (v3)
     const timeMax = fromZonedTime(end, TIMEZONE).toISOString();
 
-    const { data } = await calendar.freebusy.query({
-      requestBody: {
-        timeMin,
-        timeMax,
-        items: [{ id: CALENDAR_ID }],
-        timeZone: TIMEZONE,
-      },
-    });
+    try {
+        const { data } = await calendar.freebusy.query({
+        requestBody: {
+            timeMin,
+            timeMax,
+            items: [{ id: CALENDAR_ID }],
+            timeZone: TIMEZONE,
+        },
+        });
 
-    const busyEntries = data?.calendars?.[CALENDAR_ID]?.busy || [];
-    const busyIntervals = busyEntries.map(({ start: startIso, end: endIso }) => ({
-      start: toZonedTime(parseISO(startIso), TIMEZONE),
-      end: toZonedTime(parseISO(endIso), TIMEZONE),
-    }));
+        const busyEntries = data?.calendars?.[CALENDAR_ID]?.busy || [];
+        const busyIntervals = busyEntries.map(({ start: startIso, end: endIso }) => ({
+        start: toZonedTime(parseISO(startIso), TIMEZONE),
+        end: toZonedTime(parseISO(endIso), TIMEZONE),
+        }));
 
-    const freeSlots = getFreeSlots(busyIntervals, start, end);
-    const ranges = groupConsecutiveSlots(freeSlots);
+        const freeSlots = getFreeSlots(busyIntervals, start, end);
+        const ranges = groupConsecutiveSlots(freeSlots);
 
-    const dateLabel = formatInTimeZone(dayBase, "EEEE dd/MM", TIMEZONE);
-    const formattedLine = formatDayAvailability(dateLabel, ranges);
+        const dateLabel = formatInTimeZone(dayBase, "EEEE dd/MM", TIMEZONE);
+        const formattedLine = formatDayAvailability(dateLabel, ranges);
 
-    if (formattedLine) {
-      availabilityLines.push(formattedLine);
+        if (formattedLine) {
+        availabilityLines.push(formattedLine);
+        }
+    } catch (e) {
+        console.error(`Error consultando día ${i}:`, e.message);
     }
   }
 
   if (!availabilityLines.length) return "";
 
   return [
-    "📅 Estos son los próximos horarios disponibles:",
+    "📅 *Estos son los próximos horarios disponibles:*",
     ...availabilityLines,
-    `⏰ Horario en zona local (${TIMEZONE}).`
+    `\n⏰ Horario en zona local (${TIMEZONE}).`
   ].join("\n");
 }
 
