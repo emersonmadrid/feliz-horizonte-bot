@@ -11,7 +11,8 @@ import {
   setHours,
   setMinutes,
   startOfDay,
-  isValid 
+  isValid,
+  getDay
 } from "date-fns";
 import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
 
@@ -20,8 +21,17 @@ const CLIENT_EMAIL = process.env.GOOGLE_CALENDAR_CLIENT_EMAIL;
 const PRIVATE_KEY = (process.env.GOOGLE_CALENDAR_PRIVATE_KEY || "").replace(/\\n/g, "\n");
 const TIMEZONE = process.env.CALENDAR_TIMEZONE?.trim() || "America/Lima";
 
-const WORK_START_HOUR = 14; // 2:00 PM
-const WORK_END_HOUR = 21; // 9:00 PM (exclusive)
+// 🔧 HORARIOS ESPECÍFICOS POR DÍA
+const SCHEDULE_BY_DAY = {
+  0: { start: 10, end: 15, label: "Domingo" },     // 10:00 AM - 3:00 PM
+  1: { start: 9, end: 21, label: "Lunes" },        // 9:00 AM - 9:00 PM
+  2: { start: 9, end: 21, label: "Martes" },
+  3: { start: 9, end: 21, label: "Miércoles" },
+  4: { start: 9, end: 21, label: "Jueves" },
+  5: { start: 9, end: 21, label: "Viernes" },
+  6: { start: 9, end: 21, label: "Sábado" }
+};
+
 const SLOT_MINUTES = 60;
 
 function ensureCalendarConfig() {
@@ -47,8 +57,11 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
     throw new Error(`Fecha base inválida en buildDayWindow: ${baseDate}`);
   }
 
-  const dayStart = setMinutes(setHours(startOfDay(baseDate), WORK_START_HOUR), 0);
-  const dayEnd = setMinutes(setHours(startOfDay(baseDate), WORK_END_HOUR), 0);
+  const dayOfWeek = getDay(baseDate);
+  const schedule = SCHEDULE_BY_DAY[dayOfWeek] || { start: 9, end: 21 };
+
+  const dayStart = setMinutes(setHours(startOfDay(baseDate), schedule.start), 0);
+  const dayEnd = setMinutes(setHours(startOfDay(baseDate), schedule.end), 0);
 
   const zonedStart = includeTodayOffset
     ? maxDate([dayStart, baseDate]) 
@@ -129,15 +142,25 @@ function formatDayAvailability(dateLabel, ranges) {
   return rangeText ? `🗓️ *${dateLabel}:* ${rangeText}` : null;
 }
 
+// 📅 FALLBACK: Horarios genéricos cuando no hay disponibilidad real
+function getGenericSchedule() {
+  return `📅 *Horarios de atención generales:*
+
+🗓️ *Lunes a Viernes:* 9:00 AM - 9:00 PM
+🗓️ *Sábados:* 9:00 AM - 9:00 PM  
+🗓️ *Domingos:* 10:00 AM - 3:00 PM
+
+⚠️ *Nota:* Estos son nuestros horarios habituales, pero la disponibilidad específica puede variar. Un miembro de nuestro equipo te confirmará el horario exacto disponible.`;
+}
+
 export async function getNextAvailability(days = 3) {
   try {
     const calendar = getCalendarClient();
     const now = new Date();
     
-    // Validar que 'now' sea válida
     if (!isValid(now)) {
       console.error("❌ Fecha actual inválida");
-      return "";
+      return getGenericSchedule();
     }
 
     let zonedNow;
@@ -148,7 +171,7 @@ export async function getNextAvailability(days = 3) {
       }
     } catch (err) {
       console.error(`❌ Error crítico de zona horaria (${TIMEZONE}):`, err.message);
-      return "";
+      return getGenericSchedule();
     }
 
     const availabilityLines = [];
@@ -165,7 +188,6 @@ export async function getNextAvailability(days = 3) {
         const includeTodayOffset = i === 0;
         const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
 
-        // Si ya pasó el horario de atención de hoy, saltamos
         if (!isBefore(start, end)) continue;
 
         const timeMin = fromZonedTime(start, TIMEZONE).toISOString();
@@ -203,21 +225,27 @@ export async function getNextAvailability(days = 3) {
           availabilityLines.push(formattedLine);
         }
       } catch (e) {
-        console.error(`⚠️ Error procesando día ${i}:`, e.message, e.stack);
+        console.error(`⚠️ Error procesando día ${i}:`, e.message);
       }
     }
 
-    if (!availabilityLines.length) return "";
+    // ✅ Si encontramos disponibilidad real, la mostramos
+    if (availabilityLines.length > 0) {
+      return [
+        "📅 *Estos son los próximos horarios disponibles:*",
+        ...availabilityLines,
+        `\n⏰ Horario en zona local (${TIMEZONE}).`
+      ].join("\n");
+    }
 
-    return [
-      "📅 *Estos son los próximos horarios disponibles:*",
-      ...availabilityLines,
-      `\n⏰ Horario en zona local (${TIMEZONE}).`
-    ].join("\n");
+    // ❌ Si NO hay disponibilidad, mostramos horarios genéricos
+    console.log("⚠️ No se encontraron horarios específicos, usando fallback genérico");
+    return getGenericSchedule();
 
   } catch (globalErr) {
-    console.error("❌ Error general en Calendar:", globalErr.message, globalErr.stack);
-    return "";
+    console.error("❌ Error general en Calendar:", globalErr.message);
+    // Fallback ante cualquier error
+    return getGenericSchedule();
   }
 }
 
