@@ -296,40 +296,85 @@ export async function generateAIReply({ text, conversationContext = null, phone 
 // 📅 DETECCIÓN DE HORARIOS - MEJORADO
 // Insertar DESPUÉS de la línea 264 (después de los workflows de agendamiento)
 
-const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco|hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?|dame|damelo|nuevamente|otra vez)\b/i;
+// 📅 DETECCIÓN Y CONSULTA DE HORARIOS CON FILTRO POR DÍA
+// Reemplazar la sección existente en ai.service.js
+
+const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|disponibilidad|cu[aá]ndo|agenda|turno|hueco|hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?|dame|damelo|nuevamente|otra vez|de nuevo|solo|solamente|[uú]nicamente)\b/i;
 
 if (availabilityKeywords.test(text)) {
   console.log("📅 Usuario pregunta por horarios. Consultando Calendar...");
   
+  // Detectar si pide un día específico
+  let specificDay = null;
+  const dayPattern = /\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i;
+  const dayMatch = text.match(dayPattern);
+  
+  if (dayMatch) {
+    specificDay = dayMatch[1].toLowerCase();
+    // Normalizar acentos
+    if (specificDay === 'miércoles') specificDay = 'miercoles';
+    if (specificDay === 'sábado') specificDay = 'sabado';
+    console.log(`🎯 Día específico solicitado: ${specificDay}`);
+  }
+  
+  // Detectar filtros como "solo lunes", "únicamente martes"
+  const filterPattern = /\b(solo|solamente|[uú]nicamente)\s+(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b/i;
+  const filterMatch = text.match(filterPattern);
+  
+  if (filterMatch) {
+    specificDay = filterMatch[2].toLowerCase();
+    if (specificDay === 'miércoles') specificDay = 'miercoles';
+    if (specificDay === 'sábado') specificDay = 'sabado';
+    console.log(`🔍 Filtro detectado: solo ${specificDay}`);
+  }
+  
   try {
-    const scheduleText = await calendarService.getNextAvailability();
+    // Consultar calendario con filtro de día si aplica
+    const scheduleText = await calendarService.getNextAvailability(7, specificDay);
     
     if (scheduleText && scheduleText.length > 50) {
-      // ✅ ÉXITO: Horarios reales obtenidos
-      finalMessage = scheduleText + "\n\n¿Te gustaría reservar alguno de estos turnos? 😊";
-      meta.intent = 'horarios';
-      meta.notify_human = false;
-      meta.priority = 'low';
+      const isGenericSchedule = scheduleText.includes("Horarios de atención generales");
       
-      // Guardar horarios en contexto para evitar reconsultas
-      await mergeConversationState(phone, {
-        lastScheduleShown: scheduleText,
-        lastScheduleTime: Date.now()
-      });
-      
-      console.log("✅ Horarios mostrados al cliente");
+      if (isGenericSchedule) {
+        // Horarios genéricos → Derivar a humano
+        finalMessage = scheduleText + "\n\n👤 Un miembro de nuestro equipo te confirmará la disponibilidad exacta para que puedas elegir el mejor horario.";
+        meta.intent = 'horarios';
+        meta.notify_human = true;
+        meta.priority = 'high';
+        
+        console.log("⚠️ Horarios genéricos mostrados, derivando a humano");
+      } else {
+        // Horarios reales disponibles
+        if (specificDay) {
+          finalMessage = `Aquí están los horarios disponibles para ${specificDay}:\n\n${scheduleText}\n\n¿Te gustaría reservar alguno de estos turnos? 😊`;
+        } else {
+          finalMessage = scheduleText + "\n\n¿Te gustaría reservar alguno de estos turnos? 😊";
+        }
+        
+        meta.intent = 'horarios';
+        meta.notify_human = false;
+        meta.priority = 'low';
+        
+        // Guardar en contexto
+        await mergeConversationState(phone, {
+          lastScheduleShown: scheduleText,
+          lastScheduleTime: Date.now(),
+          lastDayFilter: specificDay
+        });
+        
+        console.log("✅ Horarios reales mostrados al cliente");
+      }
     } else {
-      throw new Error("Respuesta vacía del calendario");
+      throw new Error("Respuesta inválida del calendario");
     }
     
   } catch (err) {
-    // ❌ FALLO: Derivar a humano
     console.error("⚠️ Error consultando Calendar:", err.message);
     
     const isUrgent = /\b(hoy|ahora|ahorita|ya|urgente)\b/i.test(text);
     
     if (isUrgent) {
-      finalMessage = "Perfecto, veo que necesitas una cita para hoy. 👤 Un miembro de nuestro equipo te contactará de inmediato para coordinar la disponibilidad.";
+      finalMessage = "Entiendo que necesitas una cita para hoy. 👤 Un miembro de nuestro equipo te contactará de inmediato para coordinar la disponibilidad.";
       meta.priority = 'high';
     } else {
       finalMessage = "Estoy consultando la disponibilidad actualizada. 👤 En un momento te confirmo los horarios disponibles para que puedas elegir el que mejor te convenga.";
@@ -340,7 +385,6 @@ if (availabilityKeywords.test(text)) {
     meta.notify_human = true;
   }
 }
-
     if (availabilityKeywords.test(text)) {
       console.log("📅 INTENTO DE CALENDARIO DETECTADO: " + text);
       console.log(`📅 Usuario pregunta por horarios. Consultando Calendar...`);
