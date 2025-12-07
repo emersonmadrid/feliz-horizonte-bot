@@ -1583,18 +1583,16 @@ app.post("/webhook/whatsapp", async (req, res) => {
       phone: from
     });
 
-    // Agregar link de Calendly solo para terapia
+    // Agregar link de Calendly solo para terapia (deshabilitado temporalmente)
     let finalMessage = aiMessage;
-
-    // Solo enviar link automático si es TERAPIA
-    if (meta?.intent === 'agendar' && meta?.service === 'therapy') {
-      const calendlyUrl = process.env.CALENDLY_THERAPY_URL;
-
-      if (calendlyUrl) {
-        finalMessage += `\n\n📅 Agenda aquí tu cita de terapia psicológica:\n${calendlyUrl}`;
-        console.log(`📅 Link de Calendly agregado para terapia`);
-      }
-    }
+    // if (meta?.intent === 'agendar' && meta?.service === 'therapy') {
+    //   const calendlyUrl = process.env.CALENDLY_THERAPY_URL;
+    //
+    //   if (calendlyUrl) {
+    //     finalMessage += `\n\n📅 Agenda aquí tu cita de terapia psicológica:\n${calendlyUrl}`;
+    //     console.log(`📅 Link de Calendly agregado para terapia`);
+    //   }
+    // }
 
     // Si es PSIQUIATRÍA, derivar a humano (no enviar link)
     if (meta?.intent === 'agendar' && meta?.service === 'psychiatry') {
