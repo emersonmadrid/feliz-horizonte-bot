@@ -12,7 +12,7 @@ import {
   setMinutes,
   startOfDay,
 } from "date-fns";
-import { formatInTimeZone, utcToZonedTime, zonedTimeToUtc } from "date-fns-tz";
+import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
 
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 const CLIENT_EMAIL = process.env.GOOGLE_CALENDAR_CLIENT_EMAIL;
@@ -114,7 +114,7 @@ function formatDayAvailability(dateLabel, ranges) {
 export async function getNextAvailability(days = 3) {
   const calendar = getCalendarClient();
   const now = new Date();
-  const zonedNow = utcToZonedTime(now, TIMEZONE);
+  const zonedNow = toZonedTime(now, TIMEZONE);
 
   const availabilityLines = [];
 
@@ -123,8 +123,8 @@ export async function getNextAvailability(days = 3) {
     const includeTodayOffset = i === 0;
     const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
 
-    const timeMin = zonedTimeToUtc(start, TIMEZONE).toISOString();
-    const timeMax = zonedTimeToUtc(end, TIMEZONE).toISOString();
+    const timeMin = fromZonedTime(start, TIMEZONE).toISOString();
+    const timeMax = fromZonedTime(end, TIMEZONE).toISOString();
 
     const { data } = await calendar.freebusy.query({
       requestBody: {
@@ -137,8 +137,8 @@ export async function getNextAvailability(days = 3) {
 
     const busyEntries = data?.calendars?.[CALENDAR_ID]?.busy || [];
     const busyIntervals = busyEntries.map(({ start: startIso, end: endIso }) => ({
-      start: utcToZonedTime(parseISO(startIso), TIMEZONE),
-      end: utcToZonedTime(parseISO(endIso), TIMEZONE),
+      start: toZonedTime(parseISO(startIso), TIMEZONE),
+      end: toZonedTime(parseISO(endIso), TIMEZONE),
     }));
 
     const freeSlots = getFreeSlots(busyIntervals, start, end);
