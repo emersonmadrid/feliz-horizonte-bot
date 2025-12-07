@@ -148,8 +148,9 @@ function formatDayAvailability(dateLabel, ranges) {
   const rangeText = ranges
     .map(({ start, end }) => {
       try {
-        const startStr = formatInTimeZone(start, TIMEZONE, "h:mm a");
-        const endStr = formatInTimeZone(end, TIMEZONE, "h:mm a");
+        // CORRECCIÓN: Usar 'format' simple porque 'start' y 'end' ya tienen la hora ajustada a la zona local
+        const startStr = format(start, "h:mm a");
+        const endStr = format(end, "h:mm a");
         return `${startStr} - ${endStr}`;
       } catch (err) {
         console.error("⚠️ Error formateando rango:", err.message);
