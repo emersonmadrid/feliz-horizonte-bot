@@ -161,11 +161,11 @@ function quickAnswers(text, conversationContext = null) {
     return "Nuestros precios:\n• Terapia psicológica: S/ 85 (50 min, Presencial/Online)\n• Consulta psiquiátrica: S/ 139 (online)\n¿Te gustaría agendar una cita?";
   }
 
-  if (/(horario|atienden|atenci[oó]n|abren|disponibilidad)/.test(t) &&
+/*   if (/(horario|atienden|atenci[oó]n|abren|disponibilidad)/.test(t) &&
     !/(agendar|cita|reservar)/.test(t)) {
     return "Horarios:\n• L–V: 9:00–21:00\n• Sáb: 9:00–21:00\nDomingo 9:00–18:00.\n¿Deseas agendar?";
   }
-
+ */
   if (/(^pago$|^pagos$|formas de pago|como.*pago|m[ée]todos.*pago)/.test(t) &&
     !/(link|enlace|datos|yape|plin|cuenta|n[uú]mero)/.test(t) &&
     !/(agendar|cita|reservar)/.test(t)) {
