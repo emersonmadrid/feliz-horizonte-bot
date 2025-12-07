@@ -1625,7 +1625,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     await mergeConversationState(from, {
       lastMessageTime: Date.now(),
-      isHumanHandling: requiresHuman,
+      // isHumanHandling: requiresHuman, // No activar silencio hasta que el humano responda
       awaitingScheduling: !requiresHuman && isSchedulingIntent,
       lastIntent: meta?.intent,
       context: text
