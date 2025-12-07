@@ -213,13 +213,13 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       console.log(`💰 Cliente solicita datos de pago: ${phone}`);
       
       // Si ya confirmó el precio o está esperando pago, derivar a humano
-      if (conversationContext?.priceConfirmed || 
+      if (conversationContext?.priceConfirmed ||
           conversationContext?.awaitingPaymentConfirmation ||
           conversationContext?.paymentProcessExplained) {
         meta.notify_human = true;
         meta.priority = 'high';
         finalMessage = "👤 Perfecto, déjame conectarte con el equipo para que te envíen los datos de pago y confirmar tu cita. Un momento por favor. 💙";
-        
+
         // Actualizar estado para indicar que están esperando datos
         await mergeConversationState(phone, {
           awaitingPaymentData: true,
@@ -230,7 +230,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
         const serviceType = conversationContext?.pendingService || meta?.service || 'therapy_individual';
         let price = 85;
         let serviceName = "terapia individual";
-        
+
         if (serviceType === 'therapy_couples') {
           price = 100;
           serviceName = "terapia de parejas";
@@ -241,15 +241,29 @@ export async function generateAIReply({ text, conversationContext = null, phone 
           price = 139;
           serviceName = "consulta psiquiátrica";
         }
-        
-        finalMessage = `Para enviarte los datos de pago, primero necesito confirmar: ¿Te parece bien el costo de S/ ${price} para ${serviceName}? Una vez confirmes, te conectaré con el equipo. 😊`;
-        meta.notify_human = false;
-        
-        await mergeConversationState(phone, {
-          awaitingPriceConfirmation: true,
-          pendingService: serviceType,
-          pendingPrice: price
-        });
+
+        const shortOrInsistent = text.length <= 20 || /\b(link|pago|pagar|datos|dame|manda|envi[aá]me)\b/i.test(text);
+        const repeatedPaymentFlow = conversationContext?.awaitingPriceConfirmation || conversationContext?.awaitingPaymentData;
+
+        if (shortOrInsistent && repeatedPaymentFlow) {
+          meta.notify_human = true;
+          meta.priority = 'high';
+          // Dejar que el mensaje de la IA fluya sin repetir la confirmación
+        } else {
+          const reminder = `Para enviarte los datos de pago, primero necesito confirmar: ¿Te parece bien el costo de S/ ${price} para ${serviceName}? Una vez confirmes, te conectaré con el equipo. 😊`;
+          if (!finalMessage || finalMessage.trim().length === 0) {
+            finalMessage = reminder;
+          } else if (!finalMessage.includes(reminder)) {
+            finalMessage += `\n\n${reminder}`;
+          }
+          meta.notify_human = false;
+
+          await mergeConversationState(phone, {
+            awaitingPriceConfirmation: true,
+            pendingService: serviceType,
+            pendingPrice: price
+          });
+        }
       }
     }
 
@@ -323,7 +337,6 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       }
       // PASO 3: Derivar a humano
       else {
-        finalMessage += `\n\n👤 Perfecto, déjame conectarte con el equipo para coordinar el pago y confirmar tu horario disponible. En breve te contactamos. 💙`;
         meta.notify_human = true;
         meta.priority = 'high';
       }
