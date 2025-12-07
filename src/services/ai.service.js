@@ -291,7 +291,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     }
 
     // 📅 DETECCIÓN DE HORARIOS CON FALLBACK
-    const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco)\b/i;
+    const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?)\b/i;
     
     if (availabilityKeywords.test(text) && !conversationContext?.priceConfirmed) {
       console.log(`📅 Usuario pregunta por horarios. Consultando Calendar...`);
