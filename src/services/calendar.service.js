@@ -6,18 +6,20 @@ import {
   addDays,
   addMinutes,
   isBefore,
-  max as maxDate, // En date-fns v3, esto requiere un Array []
+  max as maxDate,
   parseISO,
   setHours,
   setMinutes,
   startOfDay,
+  isValid 
 } from "date-fns";
 import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
 
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 const CLIENT_EMAIL = process.env.GOOGLE_CALENDAR_CLIENT_EMAIL;
 const PRIVATE_KEY = (process.env.GOOGLE_CALENDAR_PRIVATE_KEY || "").replace(/\\n/g, "\n");
-const TIMEZONE = process.env.CALENDAR_TIMEZONE || "America/Lima";
+// Limpiamos comillas accidentales de la variable de entorno
+const TIMEZONE = (process.env.CALENDAR_TIMEZONE || "America/Lima").replace(/['"]/g, "").trim();
 
 const WORK_START_HOUR = 14; // 2:00 PM
 const WORK_END_HOUR = 21; // 9:00 PM (exclusive)
@@ -42,14 +44,17 @@ function getCalendarClient() {
 }
 
 function buildDayWindow(baseDate, includeTodayOffset = false) {
+  if (!isValid(baseDate)) {
+    throw new Error(`Fecha base inválida en buildDayWindow: ${baseDate}`);
+  }
+
   const dayStart = setMinutes(setHours(startOfDay(baseDate), WORK_START_HOUR), 0);
   const dayEnd = setMinutes(setHours(startOfDay(baseDate), WORK_END_HOUR), 0);
 
-  // --- CORRECCIÓN CRÍTICA AQUÍ ---
+  // Validación de seguridad para v3
   const zonedStart = includeTodayOffset
-    ? maxDate([dayStart, baseDate]) // Se añadieron los corchetes []
+    ? maxDate([dayStart, baseDate]) 
     : dayStart;
-  // -------------------------------
 
   return {
     start: zonedStart,
@@ -59,7 +64,10 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
 
 function getFreeSlots(busyIntervals, windowStart, windowEnd) {
   const slots = [];
-  const busy = [...busyIntervals].sort((a, b) => a.start - b.start);
+  // Asegurar que intervals tengan fechas válidas
+  const busy = busyIntervals
+    .filter(i => isValid(i.start) && isValid(i.end))
+    .sort((a, b) => a.start - b.start);
 
   for (
     let slotStart = windowStart;
@@ -115,38 +123,48 @@ function formatDayAvailability(dateLabel, ranges) {
 }
 
 export async function getNextAvailability(days = 3) {
-  const calendar = getCalendarClient();
-  const now = new Date();
-  const zonedNow = toZonedTime(now, TIMEZONE);
-
-  const availabilityLines = [];
-
-  for (let i = 0; i < days; i++) {
-    const dayBase = addDays(zonedNow, i);
-    const includeTodayOffset = i === 0;
+  try {
+    const calendar = getCalendarClient();
+    const now = new Date();
     
-    const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
-
-    // Si ya pasó el horario de atención de hoy, saltamos al siguiente día
-    if (!isBefore(start, end)) continue;
-
-    const timeMin = fromZonedTime(start, TIMEZONE).toISOString();
-    const timeMax = fromZonedTime(end, TIMEZONE).toISOString();
-
+    // Validar conversión de zona horaria inicial
+    let zonedNow;
     try {
+      zonedNow = toZonedTime(now, TIMEZONE);
+      if (!isValid(zonedNow)) throw new Error("Fecha inválida");
+    } catch (err) {
+      console.error(`❌ Error crítico de zona horaria (${TIMEZONE}):`, err.message);
+      return "";
+    }
+
+    const availabilityLines = [];
+
+    for (let i = 0; i < days; i++) {
+      try {
+        const dayBase = addDays(zonedNow, i);
+        const includeTodayOffset = i === 0;
+        
+        const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
+
+        // Si ya pasó el horario de atención de hoy, saltamos
+        if (!isBefore(start, end)) continue;
+
+        const timeMin = fromZonedTime(start, TIMEZONE).toISOString();
+        const timeMax = fromZonedTime(end, TIMEZONE).toISOString();
+
         const { data } = await calendar.freebusy.query({
-        requestBody: {
+          requestBody: {
             timeMin,
             timeMax,
             items: [{ id: CALENDAR_ID }],
             timeZone: TIMEZONE,
-        },
+          },
         });
 
         const busyEntries = data?.calendars?.[CALENDAR_ID]?.busy || [];
         const busyIntervals = busyEntries.map(({ start: startIso, end: endIso }) => ({
-        start: toZonedTime(parseISO(startIso), TIMEZONE),
-        end: toZonedTime(parseISO(endIso), TIMEZONE),
+          start: toZonedTime(parseISO(startIso), TIMEZONE),
+          end: toZonedTime(parseISO(endIso), TIMEZONE),
         }));
 
         const freeSlots = getFreeSlots(busyIntervals, start, end);
@@ -156,20 +174,25 @@ export async function getNextAvailability(days = 3) {
         const formattedLine = formatDayAvailability(dateLabel, ranges);
 
         if (formattedLine) {
-        availabilityLines.push(formattedLine);
+          availabilityLines.push(formattedLine);
         }
-    } catch (e) {
-        console.error(`Error consultando día ${i}:`, e.message);
+      } catch (e) {
+        console.error(`⚠️ Error procesando día ${i}:`, e.message);
+      }
     }
+
+    if (!availabilityLines.length) return "";
+
+    return [
+      "📅 *Estos son los próximos horarios disponibles:*",
+      ...availabilityLines,
+      `\n⏰ Horario en zona local (${TIMEZONE}).`
+    ].join("\n");
+
+  } catch (globalErr) {
+    console.error("❌ Error general en Calendar:", globalErr.message);
+    return "";
   }
-
-  if (!availabilityLines.length) return "";
-
-  return [
-    "📅 *Estos son los próximos horarios disponibles:*",
-    ...availabilityLines,
-    `\n⏰ Horario en zona local (${TIMEZONE}).`
-  ].join("\n");
 }
 
 const calendarService = { getNextAvailability };
