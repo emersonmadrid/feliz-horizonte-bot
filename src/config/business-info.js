@@ -6,18 +6,34 @@ export const BUSINESS = {
   timezone: "America/Lima",
 
   services: {
-    therapy: {
-      name: "Terapia Psicológica",
-      price_pen: 140,
+    therapy_individual: {
+      name: "Terapia Psicológica Individual",
+      price_pen: 85,
       duration_min: 50,
-      modality: "100% online (Zoom o Google Meet)",
+      modality: "Presencial u online (Zoom o Google Meet)",
       professional: "Lic. Cintya Isabel (Psicóloga colegiada)",
       approach: "Cognitivo–conductual",
-      for: ["ansiedad", "depresión", "estrés", "pareja", "autoestima", "duelo"]
+      for: ["ansiedad", "depresión", "estrés", "autoestima", "duelo"]
+    },
+    therapy_couples: {
+      name: "Terapia de Parejas",
+      price_pen: 100,
+      duration_min: 50,
+      modality: "Presencial u online (Zoom o Google Meet)",
+      professional: "Lic. Cintya Isabel (Psicóloga colegiada)",
+      approach: "Cognitivo–conductual"
+    },
+    therapy_family: {
+      name: "Terapia Familiar",
+      price_pen: 100,
+      duration_min: 50,
+      modality: "Presencial u online (Zoom o Google Meet)",
+      professional: "Lic. Cintya Isabel (Psicóloga colegiada)",
+      approach: "Cognitivo–conductual"
     },
     psychiatry: {
       name: "Consulta Psiquiátrica",
-      price_pen: 200,
+      price_pen: 139,
       modality: "100% online (Zoom o Google Meet)",
       professional: "Dra. Yasmín Meneses (Médica psiquiatra)",
       includes: ["evaluación médica", "diagnóstico", "prescripción si es necesario"]

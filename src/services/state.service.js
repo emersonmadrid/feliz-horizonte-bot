@@ -25,6 +25,14 @@ const DEFAULT_CONVERSATION_STATE = {
   context: null,
   buttonsSent: false,
   servicePreference: null,
+
+  // Estados de confirmación de precio y pago
+  priceConfirmed: false,
+  paymentProcessExplained: false,
+  awaitingPriceConfirmation: false,
+  awaitingPaymentConfirmation: false,
+  pendingService: null,
+  pendingPrice: null,
 };
 
 const stateStore = new Map();

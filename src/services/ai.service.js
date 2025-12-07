@@ -5,6 +5,7 @@ dotenv.config();
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getPromptConfig } from "../prompts/prompt-loader.js";
 import { buildPrompt, sanitizeGeminiApiKey } from "../utils/ai.utils.js";
+import { mergeConversationState } from "./state.service.js";
 import {
   saveMessage,
   getConversationHistory,
@@ -65,9 +66,13 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       contextPrompt += `- 🎯 Última intención detectada: ${conversationContext.lastIntent}\n`;
     }
     if (conversationContext.servicePreference) {
-      const label = conversationContext.servicePreference === 'therapy'
-        ? 'terapia psicológica'
-        : 'consulta psiquiátrica';
+      const labels = {
+        therapy_individual: 'terapia psicológica individual',
+        therapy_couples: 'terapia de parejas',
+        therapy_family: 'terapia familiar',
+        psychiatry: 'consulta psiquiátrica'
+      };
+      const label = labels[conversationContext.servicePreference] || 'el servicio indicado';
       contextPrompt += `- ✅ El cliente indicó interés en ${label}\n`;
     }
   }
@@ -160,13 +165,20 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       }
     }
     
+    const normalizedText = text.toLowerCase();
+
     // Detección manual de servicio si la IA falló
     if (!meta.service || meta.service === 'null') {
-      const textLower = text.toLowerCase();
-      if (/(psicolog[íi]a|psic[óo]log[oa]|terapia|terapeuta)/i.test(textLower)) {
-        meta.service = 'therapy';
-        console.log(`🔧 Detección manual: servicio = therapy`);
-      } else if (/(psiquiatr[íi]a|psiquiatra)/i.test(textLower)) {
+      if (/\b(terapia individual|ansiedad|depresi[óo]n|estr[eé]s)\b/i.test(normalizedText)) {
+        meta.service = 'therapy_individual';
+        console.log(`🔧 Detección manual: servicio = therapy_individual`);
+      } else if (/(terapia de pareja|pareja|relaci[óo]n)/i.test(normalizedText)) {
+        meta.service = 'therapy_couples';
+        console.log(`🔧 Detección manual: servicio = therapy_couples`);
+      } else if (/(terapia familiar|familia)/i.test(normalizedText)) {
+        meta.service = 'therapy_family';
+        console.log(`🔧 Detección manual: servicio = therapy_family`);
+      } else if (/(psiquiatr[íi]a|psiquiatra|medicaci[óo]n)/i.test(normalizedText)) {
         meta.service = 'psychiatry';
         console.log(`🔧 Detección manual: servicio = psychiatry`);
       }
@@ -177,10 +189,77 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       console.log(`🔧 Override: servicio definido por botones = ${meta.service}`);
     }
 
-    // Si detecta "agendar" + "therapy", NO derivar a humano
-    if (meta.intent === 'agendar' && meta.service === 'therapy') {
-      meta.notify_human = false;
-      console.log(`🔧 Override: agendamiento de terapia = auto-respuesta`);
+    let finalMessage = message;
+
+    // Confirmaciones basadas en contexto previo
+    if (conversationContext?.awaitingPriceConfirmation && /\b(s[ií]|si|sí|claro|ok|vale|me parece|de acuerdo)\b/i.test(normalizedText)) {
+      await mergeConversationState(phone, {
+        priceConfirmed: true,
+        awaitingPriceConfirmation: false
+      });
+      conversationContext.priceConfirmed = true;
+      conversationContext.awaitingPriceConfirmation = false;
+    }
+
+    if (conversationContext?.awaitingPaymentConfirmation && /\b(s[ií]|si|sí|claro|ok|vale|de acuerdo|listo)\b/i.test(normalizedText)) {
+      await mergeConversationState(phone, {
+        awaitingPaymentConfirmation: false
+      });
+      conversationContext.awaitingPaymentConfirmation = false;
+    }
+
+    // Workflow de agendamiento sin envío de links
+    if (meta?.intent === 'agendar') {
+      const state = conversationContext || {};
+      const serviceType = meta?.service;
+
+      // Determinar precio según servicio
+      let price = 85;
+      let serviceName = "terapia individual";
+
+      if (serviceType === 'therapy_couples') {
+        price = 100;
+        serviceName = "terapia de parejas";
+      } else if (serviceType === 'therapy_family') {
+        price = 100;
+        serviceName = "terapia familiar";
+      } else if (serviceType === 'psychiatry') {
+        price = 139;
+        serviceName = "consulta psiquiátrica";
+      }
+
+      // PASO 1: Confirmar precio
+      if (!state.priceConfirmed) {
+        finalMessage += `\n\n💰 El costo de ${serviceName} es S/ ${price} por sesión de 50 min. ¿Te parece bien?`;
+        await mergeConversationState(phone, {
+          awaitingPriceConfirmation: true,
+          pendingService: serviceType,
+          pendingPrice: price,
+          priceConfirmed: false,
+          paymentProcessExplained: false,
+          awaitingPaymentConfirmation: false
+        });
+        meta.notify_human = false;
+      }
+      // PASO 2: Explicar proceso de pago
+      else if (!state.paymentProcessExplained) {
+        finalMessage += `\n\n📋 Para confirmar tu cita necesitas:`;
+        finalMessage += `\n1️⃣ Realizar el pago de S/ ${price}`;
+        finalMessage += `\n2️⃣ Enviar captura del comprobante`;
+        finalMessage += `\n3️⃣ Recibirás el link de tu sesión confirmada`;
+        finalMessage += `\n\n¿Listo para continuar?`;
+        await mergeConversationState(phone, {
+          awaitingPaymentConfirmation: true,
+          paymentProcessExplained: true
+        });
+        meta.notify_human = false;
+      }
+      // PASO 3: Derivar a humano
+      else {
+        finalMessage += `\n\n👤 Perfecto, déjame conectarte con el equipo para coordinar el pago y confirmar tu horario disponible. En breve te contactamos. 💙`;
+        meta.notify_human = true;
+        meta.priority = 'high';
+      }
     }
 
     // Lógica de frustración
@@ -189,9 +268,8 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       'me ibas', 'ibas a', 'dijiste que', 'prometiste', 'cansado',
       'molesto', 'fastidioso', 'inútil'
     ];
-    
-    const textLower = text.toLowerCase();
-    const isFrustrated = frustrationKeywords.some(keyword => textLower.includes(keyword));
+
+    const isFrustrated = frustrationKeywords.some(keyword => normalizedText.includes(keyword));
     
     if (isFrustrated) {
       meta.notify_human = true;
@@ -227,7 +305,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
 
     console.log(`📊 Meta final:`, JSON.stringify(meta));
 
-    return { message, meta };
+    return { message: finalMessage, meta };
   } catch (e) {
     console.error("❌ AI error:", e?.message);
     return {
