@@ -148,7 +148,11 @@ const crisisMessage =
 function quickAnswers(text, conversationContext = null) {
   const t = (text || "").toLowerCase();
 
-  if (conversationContext?.isHumanHandling || conversationContext?.awaitingScheduling) {
+  if (conversationContext?.priceConfirmed ||
+      conversationContext?.awaitingPriceConfirmation ||
+      conversationContext?.awaitingPaymentConfirmation ||
+      conversationContext?.isHumanHandling ||
+      conversationContext?.awaitingScheduling) {
     return null;
   }
 
@@ -162,7 +166,8 @@ function quickAnswers(text, conversationContext = null) {
     return "Horarios:\n• L–V: 9:00–21:00\n• Sáb: 9:00–21:00\nDomingo 9:00–18:00.\n¿Deseas agendar?";
   }
 
-  if (/(pago|pagar|yape|plin|transfer)/.test(t) &&
+  if (/(^pago$|^pagos$|formas de pago|como.*pago|m[ée]todos.*pago)/.test(t) &&
+    !/(link|enlace|datos|yape|plin|cuenta|n[uú]mero)/.test(t) &&
     !/(agendar|cita|reservar)/.test(t)) {
     return "Formas de pago: Yape, Plin y transferencia. Te compartimos los datos al confirmar la cita.";
   }
@@ -1446,9 +1451,16 @@ app.post("/webhook/whatsapp", async (req, res) => {
       conversationContext = await mergeConversationState(from, {});
     }
 
+    const isInSchedulingProcess =
+      conversationContext?.priceConfirmed ||
+      conversationContext?.awaitingPriceConfirmation ||
+      conversationContext?.awaitingPaymentConfirmation ||
+      conversationContext?.awaitingScheduling ||
+      conversationContext?.isHumanHandling;
+
     let justSentButtons = false;
 
-    if (!conversationContext.buttonsSent) {
+    if (!conversationContext.buttonsSent && !isInSchedulingProcess) {
       try {
         await sendWhatsAppButtons(from);
         conversationContext = await mergeConversationState(from, { buttonsSent: true });
@@ -1458,7 +1470,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       }
     }
 
-    if (justSentButtons && !buttonSelection) {
+    if (justSentButtons && !buttonSelection && !isInSchedulingProcess) {
       console.log(`⏸️ Botones enviados a ${from}, esperando selección antes de responder con IA`);
       await mergeConversationState(from, {
         lastMessageTime: Date.now(),

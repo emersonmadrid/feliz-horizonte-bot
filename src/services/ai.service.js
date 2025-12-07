@@ -208,6 +208,51 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       conversationContext.awaitingPaymentConfirmation = false;
     }
 
+    // Manejo especial para solicitud de datos de pago
+    if (meta?.intent === 'solicitar_datos_pago') {
+      console.log(`💰 Cliente solicita datos de pago: ${phone}`);
+      
+      // Si ya confirmó el precio o está esperando pago, derivar a humano
+      if (conversationContext?.priceConfirmed || 
+          conversationContext?.awaitingPaymentConfirmation ||
+          conversationContext?.paymentProcessExplained) {
+        meta.notify_human = true;
+        meta.priority = 'high';
+        finalMessage = "👤 Perfecto, déjame conectarte con el equipo para que te envíen los datos de pago y confirmar tu cita. Un momento por favor. 💙";
+        
+        // Actualizar estado para indicar que están esperando datos
+        await mergeConversationState(phone, {
+          awaitingPaymentData: true,
+          isHumanHandling: true
+        });
+      } else {
+        // Si NO confirmó precio, recordarle primero
+        const serviceType = conversationContext?.pendingService || meta?.service || 'therapy_individual';
+        let price = 85;
+        let serviceName = "terapia individual";
+        
+        if (serviceType === 'therapy_couples') {
+          price = 100;
+          serviceName = "terapia de parejas";
+        } else if (serviceType === 'therapy_family') {
+          price = 100;
+          serviceName = "terapia familiar";
+        } else if (serviceType === 'psychiatry') {
+          price = 139;
+          serviceName = "consulta psiquiátrica";
+        }
+        
+        finalMessage = `Para enviarte los datos de pago, primero necesito confirmar: ¿Te parece bien el costo de S/ ${price} para ${serviceName}? Una vez confirmes, te conectaré con el equipo. 😊`;
+        meta.notify_human = false;
+        
+        await mergeConversationState(phone, {
+          awaitingPriceConfirmation: true,
+          pendingService: serviceType,
+          pendingPrice: price
+        });
+      }
+    }
+
     // Workflow de agendamiento sin envío de links
     if (meta?.intent === 'agendar') {
       const state = conversationContext || {};
