@@ -6,7 +6,7 @@ import {
   addDays,
   addMinutes,
   isBefore,
-  max as maxDate, // Renombramos 'max' a 'maxDate' para evitar confusiones
+  max as maxDate, // En date-fns v3, esto requiere un Array []
   parseISO,
   setHours,
   setMinutes,
@@ -45,10 +45,11 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
   const dayStart = setMinutes(setHours(startOfDay(baseDate), WORK_START_HOUR), 0);
   const dayEnd = setMinutes(setHours(startOfDay(baseDate), WORK_END_HOUR), 0);
 
-  // CORRECCIÓN AQUÍ: maxDate requiere un ARRAY de fechas en date-fns v2/v3
+  // --- CORRECCIÓN CRÍTICA AQUÍ ---
   const zonedStart = includeTodayOffset
-    ? maxDate([dayStart, baseDate]) // <--- ¡AQUÍ ESTABA EL ERROR! (Faltaban los corchetes [])
+    ? maxDate([dayStart, baseDate]) // Se añadieron los corchetes []
     : dayStart;
+  // -------------------------------
 
   return {
     start: zonedStart,
@@ -67,7 +68,6 @@ function getFreeSlots(busyIntervals, windowStart, windowEnd) {
   ) {
     const slotEnd = addMinutes(slotStart, SLOT_MINUTES);
     
-    // Verificar que el slot esté dentro de la ventana y sea futuro
     if (!isBefore(slotEnd, windowStart) && !isBefore(windowEnd, slotEnd)) {
       const overlaps = busy.some((interval) =>
         !(isBefore(slotEnd, interval.start) || isBefore(interval.end, slotStart))
@@ -117,7 +117,7 @@ function formatDayAvailability(dateLabel, ranges) {
 export async function getNextAvailability(days = 3) {
   const calendar = getCalendarClient();
   const now = new Date();
-  const zonedNow = toZonedTime(now, TIMEZONE); // Usando toZonedTime (v3)
+  const zonedNow = toZonedTime(now, TIMEZONE);
 
   const availabilityLines = [];
 
@@ -125,13 +125,12 @@ export async function getNextAvailability(days = 3) {
     const dayBase = addDays(zonedNow, i);
     const includeTodayOffset = i === 0;
     
-    // Obtener ventana de trabajo
     const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
 
-    // Si la hora de inicio es después de la hora de fin (ej: ya pasó el turno de hoy), saltar
+    // Si ya pasó el horario de atención de hoy, saltamos al siguiente día
     if (!isBefore(start, end)) continue;
 
-    const timeMin = fromZonedTime(start, TIMEZONE).toISOString(); // Usando fromZonedTime (v3)
+    const timeMin = fromZonedTime(start, TIMEZONE).toISOString();
     const timeMax = fromZonedTime(end, TIMEZONE).toISOString();
 
     try {
