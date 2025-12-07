@@ -253,6 +253,28 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       }
     }
 
+    // Manejo de preguntas repetidas sobre servicios (dinámico)
+    if ((meta?.intent === 'servicios' || meta?.intent === 'precios') && !meta.notify_human) {
+      // Detectar servicio mencionado de forma flexible
+      const textLower = text.toLowerCase();
+
+      if (/pareja|parejas|relaci[oó]n|mi pareja/.test(textLower)) {
+        meta.service = 'therapy_couples';
+      } else if (/familia|familiar|padres|hijos/.test(textLower)) {
+        meta.service = 'therapy_family';
+      } else if (/psiquiatr|psiquiatra|medicaci[oó]n|medicamento/.test(textLower)) {
+        meta.service = 'psychiatry';
+      } else if (/individual|personal|yo|m[ií]/.test(textLower)) {
+        meta.service = 'therapy_individual';
+      }
+
+      // Asegurar que NO se derive por preguntar de nuevo
+      meta.notify_human = false;
+      meta.priority = 'low';
+
+      console.log(`🔄 Pregunta sobre servicio ${meta.service || 'general'} - respondiendo directamente`);
+    }
+
     // Workflow de agendamiento sin envío de links
     if (meta?.intent === 'agendar') {
       const state = conversationContext || {};
@@ -307,23 +329,8 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       }
     }
 
-    // Lógica de frustración
-    const frustrationKeywords = [
-      'ya te dije', 'ya dije', 'ya lo mencioné', 'repites', 'otra vez',
-      'me ibas', 'ibas a', 'dijiste que', 'prometiste', 'cansado',
-      'molesto', 'fastidioso', 'inútil'
-    ];
-
-    const isFrustrated = frustrationKeywords.some(keyword => normalizedText.includes(keyword));
-    
-    if (isFrustrated) {
-      meta.notify_human = true;
-      meta.priority = 'high';
-      console.log(`⚠️ Frustración detectada en: "${text}"`);
-    }
-
     // Si el cliente menciona "hoy" o "ahora", derivar a humano
-    if (/\b(hoy|ahora|ahorita|ya|inmediato)\b/i.test(text) && 
+    if (/\b(hoy|ahora|ahorita|ya|inmediato)\b/i.test(text) &&
         (meta.intent === 'agendar' || meta.intent === 'horarios')) {
       meta.notify_human = true;
       console.log(`⚠️ Solicitud urgente detectada: "${text}"`);

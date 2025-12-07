@@ -1515,6 +1515,31 @@ app.post("/webhook/whatsapp", async (req, res) => {
       return res.sendStatus(200);
     }
 
+    // Detectar mensajes de seguimiento/insistencia
+    const followUpPattern = /^(hola[\?!]*|h+o+l+a+[\?!]*|ey|oye|hey|est[aá]s|me escuchas|sigues ah[ií])[\?!]*$/i;
+    const isFollowUp = followUpPattern.test(text.trim());
+
+    if (isFollowUp && conversationContext) {
+      console.log(`👋 Mensaje de seguimiento detectado de ${from}`);
+
+      const responses = [
+        "¡Aquí estoy! 😊 ¿En qué más puedo ayudarte?",
+        "¡Sí, aquí estoy! ¿Qué necesitas saber? 😊",
+        "¡Presente! 💙 ¿En qué más te puedo ayudar?"
+      ];
+
+      const response = responses[Math.floor(Math.random() * responses.length)];
+
+      await sendWhatsAppText(from, response);
+      await notifyTelegram("👋 Mensaje de seguimiento", [incomingTelegramLine], from);
+
+      await mergeConversationState(from, {
+        lastMessageTime: Date.now()
+      });
+
+      return res.sendStatus(200);
+    }
+
     // Quick answers con contexto
     const quick = quickAnswers(text, conversationContext);
     if (quick) {
