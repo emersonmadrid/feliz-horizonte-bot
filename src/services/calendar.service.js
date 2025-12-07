@@ -18,8 +18,7 @@ import { formatInTimeZone, toZonedTime, fromZonedTime } from "date-fns-tz";
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 const CLIENT_EMAIL = process.env.GOOGLE_CALENDAR_CLIENT_EMAIL;
 const PRIVATE_KEY = (process.env.GOOGLE_CALENDAR_PRIVATE_KEY || "").replace(/\\n/g, "\n");
-// Limpiamos comillas accidentales de la variable de entorno
-const TIMEZONE = (process.env.CALENDAR_TIMEZONE || "America/Lima").replace(/['"]/g, "").trim();
+const TIMEZONE = process.env.CALENDAR_TIMEZONE?.trim() || "America/Lima";
 
 const WORK_START_HOUR = 14; // 2:00 PM
 const WORK_END_HOUR = 21; // 9:00 PM (exclusive)
@@ -51,7 +50,6 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
   const dayStart = setMinutes(setHours(startOfDay(baseDate), WORK_START_HOUR), 0);
   const dayEnd = setMinutes(setHours(startOfDay(baseDate), WORK_END_HOUR), 0);
 
-  // Validación de seguridad para v3
   const zonedStart = includeTodayOffset
     ? maxDate([dayStart, baseDate]) 
     : dayStart;
@@ -64,7 +62,6 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
 
 function getFreeSlots(busyIntervals, windowStart, windowEnd) {
   const slots = [];
-  // Asegurar que intervals tengan fechas válidas
   const busy = busyIntervals
     .filter(i => isValid(i.start) && isValid(i.end))
     .sort((a, b) => a.start - b.start);
@@ -116,10 +113,20 @@ function formatDayAvailability(dateLabel, ranges) {
   if (!ranges.length) return null;
 
   const rangeText = ranges
-    .map(({ start, end }) => `${formatInTimeZone(start, "h:mm a", TIMEZONE)} - ${formatInTimeZone(end, "h:mm a", TIMEZONE)}`)
+    .map(({ start, end }) => {
+      try {
+        const startStr = formatInTimeZone(start, TIMEZONE, "h:mm a");
+        const endStr = formatInTimeZone(end, TIMEZONE, "h:mm a");
+        return `${startStr} - ${endStr}`;
+      } catch (err) {
+        console.error("⚠️ Error formateando rango:", err.message);
+        return null;
+      }
+    })
+    .filter(Boolean)
     .join(" | ");
 
-  return `🗓️ *${dateLabel}:* ${rangeText}`;
+  return rangeText ? `🗓️ *${dateLabel}:* ${rangeText}` : null;
 }
 
 export async function getNextAvailability(days = 3) {
@@ -127,11 +134,18 @@ export async function getNextAvailability(days = 3) {
     const calendar = getCalendarClient();
     const now = new Date();
     
-    // Validar conversión de zona horaria inicial
+    // Validar que 'now' sea válida
+    if (!isValid(now)) {
+      console.error("❌ Fecha actual inválida");
+      return "";
+    }
+
     let zonedNow;
     try {
       zonedNow = toZonedTime(now, TIMEZONE);
-      if (!isValid(zonedNow)) throw new Error("Fecha inválida");
+      if (!isValid(zonedNow)) {
+        throw new Error("Conversión a zona horaria falló");
+      }
     } catch (err) {
       console.error(`❌ Error crítico de zona horaria (${TIMEZONE}):`, err.message);
       return "";
@@ -142,8 +156,13 @@ export async function getNextAvailability(days = 3) {
     for (let i = 0; i < days; i++) {
       try {
         const dayBase = addDays(zonedNow, i);
-        const includeTodayOffset = i === 0;
         
+        if (!isValid(dayBase)) {
+          console.error(`⚠️ Día ${i} inválido después de addDays`);
+          continue;
+        }
+
+        const includeTodayOffset = i === 0;
         const { start, end } = buildDayWindow(dayBase, includeTodayOffset);
 
         // Si ya pasó el horario de atención de hoy, saltamos
@@ -162,22 +181,29 @@ export async function getNextAvailability(days = 3) {
         });
 
         const busyEntries = data?.calendars?.[CALENDAR_ID]?.busy || [];
-        const busyIntervals = busyEntries.map(({ start: startIso, end: endIso }) => ({
-          start: toZonedTime(parseISO(startIso), TIMEZONE),
-          end: toZonedTime(parseISO(endIso), TIMEZONE),
-        }));
+        const busyIntervals = busyEntries.map(({ start: startIso, end: endIso }) => {
+          try {
+            return {
+              start: toZonedTime(parseISO(startIso), TIMEZONE),
+              end: toZonedTime(parseISO(endIso), TIMEZONE),
+            };
+          } catch (err) {
+            console.error("⚠️ Error parseando intervalo ocupado:", err.message);
+            return null;
+          }
+        }).filter(Boolean);
 
         const freeSlots = getFreeSlots(busyIntervals, start, end);
         const ranges = groupConsecutiveSlots(freeSlots);
 
-        const dateLabel = formatInTimeZone(dayBase, "EEEE dd/MM", TIMEZONE);
+        const dateLabel = formatInTimeZone(dayBase, TIMEZONE, "EEEE dd/MM");
         const formattedLine = formatDayAvailability(dateLabel, ranges);
 
         if (formattedLine) {
           availabilityLines.push(formattedLine);
         }
       } catch (e) {
-        console.error(`⚠️ Error procesando día ${i}:`, e.message);
+        console.error(`⚠️ Error procesando día ${i}:`, e.message, e.stack);
       }
     }
 
@@ -190,7 +216,7 @@ export async function getNextAvailability(days = 3) {
     ].join("\n");
 
   } catch (globalErr) {
-    console.error("❌ Error general en Calendar:", globalErr.message);
+    console.error("❌ Error general en Calendar:", globalErr.message, globalErr.stack);
     return "";
   }
 }
