@@ -314,7 +314,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       } catch (err) {
         // ❌ FALLO / ERROR DE API: Fallback a humano
         console.error("⚠️ Error consultando Calendar:", err.message);
-        finalMessage = "⚠️ DEBUG ERROR CALENDAR: " + err.message;
+        finalMessage = "En este momento estoy actualizando mi agenda, pero no te preocupes. 👤 Un miembro de nuestro equipo te escribirá en breve para indicarte los horarios disponibles y ayudarte a coordinar.";
         meta.intent = 'check_availability_fallback';
         meta.notify_human = true; // <--- Importante: Llama al humano
         meta.priority = 'high';

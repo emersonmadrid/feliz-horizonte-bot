@@ -46,7 +46,7 @@ function buildDayWindow(baseDate, includeTodayOffset = false) {
   const dayEnd = setMinutes(setHours(startOfDay(baseDate), WORK_END_HOUR), 0);
 
   const zonedStart = includeTodayOffset
-    ? maxDate(dayStart, baseDate)
+    ? maxDate([dayStart, baseDate])
     : dayStart;
 
   return {
