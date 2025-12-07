@@ -21,10 +21,10 @@ if (!API_KEY || !API_KEY.startsWith("AIza")) {
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-const multimodalModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+const multimodalModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 const audioReplyModel = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash",
+  model: "gemini-2.5-flash-lite",
   generationConfig: {
     responseMimeType: "audio/mpeg",
   },
