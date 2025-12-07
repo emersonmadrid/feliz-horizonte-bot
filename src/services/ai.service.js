@@ -291,7 +291,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     }
 
     // 📅 DETECCIÓN DE HORARIOS CON FALLBACK
-    const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?)\b/i;
+    const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco|hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?)\b/i;
     
     if (availabilityKeywords.test(text)) {
       console.log("📅 INTENTO DE CALENDARIO DETECTADO: " + text);
@@ -314,7 +314,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       } catch (err) {
         // ❌ FALLO / ERROR DE API: Fallback a humano
         console.error("⚠️ Error consultando Calendar:", err.message);
-        finalMessage = "En este momento estoy actualizando mi agenda, pero no te preocupes. 👤 Un miembro de nuestro equipo te escribirá en breve para indicarte los horarios disponibles y ayudarte a coordinar.";
+        finalMessage = "⚠️ DEBUG ERROR CALENDAR: " + err.message;
         meta.intent = 'check_availability_fallback';
         meta.notify_human = true; // <--- Importante: Llama al humano
         meta.priority = 'high';
