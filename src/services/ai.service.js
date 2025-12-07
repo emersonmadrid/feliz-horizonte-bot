@@ -36,24 +36,32 @@ export async function generateAIReply({ text, conversationContext = null, phone 
   let contextPrompt = "";
   
   if (phone) {
-    const history = await getConversationHistory(phone, 15); // Últimos 15 mensajes
-    
+    const history = await getConversationHistory(phone, 15);
     if (history.length > 0) {
       contextPrompt = formatHistoryForPrompt(history);
-      
-      // Añadir estadísticas de la conversación
-      const stats = await getHistoryStats(phone);
-      if (stats) {
-        contextPrompt += `\nESTADÍSTICAS:\n`;
-        contextPrompt += `- Mensajes totales: ${stats.totalMessages}\n`;
-        contextPrompt += `- Edad de conversación: ${stats.conversationAge} minutos\n`;
-        if (stats.lastIntent) {
-          contextPrompt += `- Última intención: ${stats.lastIntent}\n`;
-        }
-      }
+      // ... (código existente de estadísticas) ...
     }
   }
+
+  // --- NUEVO CÓDIGO INICIO: Inyectar disponibilidad en el contexto ---
+  const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco|hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?)\b/i;
   
+  if (availabilityKeywords.test(text)) {
+    console.log(`📅 Usuario pregunta por horarios. Consultando Calendar...`);
+    try {
+      // Obtenemos los horarios crudos
+      const scheduleText = await calendarService.getNextAvailability();
+      
+      if (scheduleText) {
+        // Se lo damos a la IA para que ella filtre según lo que pida el usuario
+        contextPrompt += `\n\n=== INFORMACIÓN DE AGENDA EN TIEMPO REAL (FUENTE DE VERDAD) ===\n${scheduleText}\nINSTRUCCIONES: Usa esta lista para responder. Si el usuario pide un día específico (ej. "solo lunes"), MUESTRA SOLO ESE DÍA. No inventes horarios.\n==========================================================\n`;
+      } else {
+        contextPrompt += `\n\n=== INFORMACIÓN DE AGENDA ===\nLa agenda está llena o no disponible por el momento.\n=============================\n`;
+      }
+    } catch (err) {
+      console.error("⚠️ Error consultando Calendar para contexto:", err.message);
+    }
+  }  
   // 2. AÑADIR CONTEXTO DEL ESTADO
   if (conversationContext) {
     contextPrompt += `\nCONTEXTO ADICIONAL:\n`;
@@ -299,7 +307,7 @@ export async function generateAIReply({ text, conversationContext = null, phone 
 // 📅 DETECCIÓN Y CONSULTA DE HORARIOS CON FILTRO POR DÍA
 // Reemplazar la sección existente en ai.service.js
 
-const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|disponibilidad|cu[aá]ndo|agenda|turno|hueco|hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?|dame|damelo|nuevamente|otra vez|de nuevo|solo|solamente|[uú]nicamente)\b/i;
+/* const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|disponibilidad|cu[aá]ndo|agenda|turno|hueco|hoy|mañana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tarde|noche|d[ií]as?|fechas?|dame|damelo|nuevamente|otra vez|de nuevo|solo|solamente|[uú]nicamente)\b/i;
 
 if (availabilityKeywords.test(text)) {
   console.log("📅 Usuario pregunta por horarios. Consultando Calendar...");
@@ -412,7 +420,7 @@ if (availabilityKeywords.test(text)) {
         meta.priority = 'high';
       }
     }
-
+ */
     // Workflow de agendamiento sin envío de links
     if (meta?.intent === 'agendar') {
       const state = conversationContext || {};
