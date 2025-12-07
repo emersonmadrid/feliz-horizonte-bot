@@ -12,6 +12,7 @@ import {
   formatHistoryForPrompt,
   getHistoryStats
 } from "./conversation-history.service.js";
+import calendarService from "./calendar.service.js";
 
 const RAW_KEY = process.env.GEMINI_API_KEY || "";
 const API_KEY = sanitizeGeminiApiKey(RAW_KEY);
@@ -287,6 +288,36 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       meta.priority = 'low';
 
       console.log(`🔄 Pregunta sobre servicio ${meta.service || 'general'} - respondiendo directamente`);
+    }
+
+    // 📅 DETECCIÓN DE HORARIOS CON FALLBACK
+    const availabilityKeywords = /\b(horarios?|horas?|libre|disponible|cu[aá]ndo|agenda|turno|hueco)\b/i;
+    
+    if (availabilityKeywords.test(text) && !conversationContext?.priceConfirmed) {
+      console.log(`📅 Usuario pregunta por horarios. Consultando Calendar...`);
+      
+      try {
+        // Intenta obtener horarios reales
+        const scheduleText = await calendarService.getNextAvailability();
+        
+        if (scheduleText) {
+          // ✅ ÉXITO: Muestra horarios automáticos
+          finalMessage = scheduleText + "\n\n¿Te gustaría reservar alguno de estos turnos? 😊";
+          meta.intent = 'info_calendar';
+          meta.notify_human = false;
+        } else {
+          // Si devuelve vacío (agenda llena), lanza error para activar el catch
+          throw new Error("Agenda llena o sin cupos");
+        }
+        
+      } catch (err) {
+        // ❌ FALLO / ERROR DE API: Fallback a humano
+        console.error("⚠️ Error consultando Calendar:", err.message);
+        finalMessage = "En este momento estoy actualizando mi agenda, pero no te preocupes. 👤 Un miembro de nuestro equipo te escribirá en breve para indicarte los horarios disponibles y ayudarte a coordinar.";
+        meta.intent = 'check_availability_fallback';
+        meta.notify_human = true; // <--- Importante: Llama al humano
+        meta.priority = 'high';
+      }
     }
 
     // Workflow de agendamiento sin envío de links
