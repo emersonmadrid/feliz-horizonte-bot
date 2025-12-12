@@ -1192,6 +1192,7 @@ app.post("/telegram/webhook", async (req, res) => {
 
     if (!hasMedia && text.startsWith("/")) {
       console.log(`🤖 Comando detectado: ${text}`);
+      bot.processUpdate(update);
       return res.sendStatus(200);
     }
 
