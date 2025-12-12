@@ -190,6 +190,33 @@ async function sendWhatsAppText(to, text) {
   console.log(`✅ WhatsApp enviado exitosamente a ${to}`);
 }
 
+async function sendWhatsAppTemplate(to, templateName) {
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Template WhatsApp → ${to}: ${templateName}`);
+    return { simulated: true };
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  console.log(`📤 Enviando template "${templateName}" a ${to}`);
+
+  const response = await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: "es" },
+      },
+    },
+    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+  );
+
+  console.log(`✅ Template enviado a ${to}`);
+  return response?.data;
+}
+
 async function sendWhatsAppButtons(to) {
   const welcomeText =
     "Hola 👋 Soy el asistente virtual de Feliz Horizonte. ¿Te gustaría hablar con psicología o psiquiatría?";
@@ -806,6 +833,26 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
   } catch (e) {
     console.error("❌ Error en /enviar:", e.message);
     bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`);
+  }
+});
+
+bot.onText(/^\/reactivar\s+(\S+)$/i, async (msg, match) => {
+  console.log(`📨 Comando /reactivar recibido de ${msg.chat.id}`);
+
+  const chatId = String(msg.chat.id);
+  if (chatId !== ADMIN && chatId !== PANEL_CHAT_ID) {
+    return bot.sendMessage(msg.chat.id, "No autorizado.");
+  }
+
+  const to = match[1].trim();
+  const sendOptions = msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {};
+
+  try {
+    await sendWhatsAppTemplate(to, "reanudar_chat");
+    await bot.sendMessage(msg.chat.id, `✅ Plantilla enviada a ${to}`, sendOptions);
+  } catch (e) {
+    console.error("❌ Error en /reactivar:", e.message);
+    await bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`, sendOptions);
   }
 });
 
