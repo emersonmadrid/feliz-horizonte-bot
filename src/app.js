@@ -38,8 +38,12 @@ const ENABLE_AUDIO_TRANSCRIPTION = (process.env.WHATSAPP_AUDIO_TRANSCRIPTION ?? 
 const ENABLE_AUDIO_RESPONSES = (process.env.WHATSAPP_AUDIO_RESPONSES ?? "0") === "1";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-const USE_WEBHOOK = VERCEL === "1" && VERCEL_ENV === "production" && PUBLIC_URL;
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: !USE_WEBHOOK });
+
+const isProd = VERCEL === "1" && VERCEL_ENV === "production";
+const isPreview = VERCEL === "1" && VERCEL_ENV !== "production";
+const USE_WEBHOOK = isProd && Boolean(PUBLIC_URL);
+const USE_POLLING = VERCEL !== "1";
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: USE_POLLING });
 
 async function checkSupabaseConnection() {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -75,7 +79,7 @@ async function checkTelegramConnection() {
   }
 }
 
-// Configuración webhook
+// Configuración webhook/polling
 if (USE_WEBHOOK) {
   const baseUrl = PUBLIC_URL.replace(/\/$/, '');
   const webhookUrl = `${baseUrl}/telegram/webhook`;
@@ -98,9 +102,9 @@ if (USE_WEBHOOK) {
     .catch((err) => {
       console.error(`❌ Error configurando webhook:`, err.response?.data || err.message);
     });
-} else if (VERCEL === "1" && VERCEL_ENV !== "production") {
-  console.log(`⚠️ Preview deployment detectado (${VERCEL_ENV}) - NO se configura webhook`);
-} else {
+} else if (isPreview) {
+  console.log(`⚠️ Preview deployment detectado (${VERCEL_ENV}) - NO se configura webhook ni polling`);
+} else if (USE_POLLING) {
   console.log(`🔄 Modo local - usando polling`);
 }
 
@@ -193,28 +197,42 @@ async function sendWhatsAppText(to, text) {
 async function sendWhatsAppTemplate(to, templateName) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
     console.log(`📱 [SIMULADO] Template WhatsApp → ${to}: ${templateName}`);
-    return { simulated: true };
+    throw new Error("Faltan credenciales de WhatsApp (WHATSAPP_API_TOKEN o WHATSAPP_PHONE_NUMBER_ID)");
   }
 
   const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-  console.log(`📤 Enviando template "${templateName}" a ${to}`);
-
-  const response = await axios.post(
-    url,
-    {
-      messaging_product: "whatsapp",
-      to,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: "es" },
-      },
+  const sanitizedToken = WHATSAPP_API_TOKEN?.length
+    ? `${WHATSAPP_API_TOKEN.slice(0, 6)}...${WHATSAPP_API_TOKEN.slice(-4)}`
+    : "(no token)";
+  const body = {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: "es" },
     },
-    { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
-  );
+  };
+  const headers = { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` };
 
-  console.log(`✅ Template enviado a ${to}`);
-  return response?.data;
+  console.log("📤 Enviando template WhatsApp con:", {
+    url,
+    headers: { ...headers, Authorization: `Bearer ${sanitizedToken}` },
+    body,
+  });
+
+  try {
+    const response = await axios.post(url, body, { headers });
+    console.log("✅ Respuesta de WhatsApp:", response?.data);
+    return response?.data;
+  } catch (err) {
+    const metaError = err?.response?.data || err?.message || err;
+    console.error("❌ Error al enviar template WhatsApp:", metaError);
+    if (err?.response?.data?.error?.message) {
+      throw new Error(err.response.data.error.message);
+    }
+    throw err;
+  }
 }
 
 async function sendWhatsAppButtons(to) {
@@ -851,8 +869,13 @@ bot.onText(/^\/reactivar\s+(\S+)$/i, async (msg, match) => {
     await sendWhatsAppTemplate(to, "reanudar_chat");
     await bot.sendMessage(msg.chat.id, `✅ Plantilla enviada a ${to}`, sendOptions);
   } catch (e) {
-    console.error("❌ Error en /reactivar:", e.message);
-    await bot.sendMessage(msg.chat.id, `❌ Error: ${e.message}`, sendOptions);
+    const errorMsg = e?.message || "Error desconocido al enviar la plantilla";
+    console.error("❌ Error en /reactivar:", errorMsg);
+    await bot.sendMessage(
+      msg.chat.id,
+      `❌ Error al enviar plantilla a ${to}: ${errorMsg}`,
+      sendOptions
+    );
   }
 });
 

@@ -75,27 +75,40 @@ async function deleteRemoteState(phone) {
   }
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function hydrateFromSupabase() {
   if (!supabaseEnabled || !supabase) return;
 
-  try {
-    const cutoff = new Date(Date.now() - TTL_MS).toISOString();
-    const { data, error } = await supabase
-      .from(STATE_TABLE)
-      .select("phone, state, updated_at")
-      .gte("updated_at", cutoff);
+  const maxAttempts = 3;
 
-    if (error) throw error;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const cutoff = new Date(Date.now() - TTL_MS).toISOString();
+      const { data, error } = await supabase
+        .from(STATE_TABLE)
+        .select("phone, state, updated_at")
+        .gte("updated_at", cutoff);
 
-    data?.forEach(({ phone, state, updated_at }) => {
-      const updatedAt = updated_at ? new Date(updated_at).getTime() : Date.now();
-      stateStore.set(phone, { state: normalizeState(state), updatedAt });
-    });
+      if (error) throw error;
 
-    console.log(`💾 Estado cargado desde Supabase: ${stateStore.size} conversaciones activas`);
-  } catch (err) {
-    supabaseEnabled = false;
-    console.error("⚠️ No se pudo hidratar el estado desde Supabase:", err?.message || err);
+      data?.forEach(({ phone, state, updated_at }) => {
+        const updatedAt = updated_at ? new Date(updated_at).getTime() : Date.now();
+        stateStore.set(phone, { state: normalizeState(state), updatedAt });
+      });
+
+      console.log(`💾 Estado cargado desde Supabase: ${stateStore.size} conversaciones activas`);
+      return;
+    } catch (err) {
+      const attemptMsg = `Intento ${attempt}/${maxAttempts}`;
+      console.debug(`⚠️ No se pudo hidratar el estado desde Supabase (${attemptMsg}):`, err?.message || err);
+      if (attempt < maxAttempts) {
+        const backoffMs = 500 * 2 ** (attempt - 1);
+        await wait(backoffMs);
+      }
+    }
   }
 }
 
