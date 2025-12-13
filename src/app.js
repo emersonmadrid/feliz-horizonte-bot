@@ -154,6 +154,60 @@ const timeoutWarnings = new Map(); // Almacenar timeouts de advertencia
 const phoneToTopic = new Map();
 const topicToPhone = new Map();
 
+console.log(`🔄 Cargando topics desde Supabase al iniciar...`);
+
+// Función para cargar todos los topics en memoria
+async function preloadTopicsFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.warn("⚠️ No hay credenciales de Supabase, saltando precarga de topics");
+    return;
+  }
+
+  try {
+    console.log(`📥 Consultando todos los topics desde Supabase...`);
+    const startTime = Date.now();
+
+    const { data, error } = await supabase
+      .from("fh_topics")
+      .select("phone, topic_id")
+      .order("created_at", { ascending: false });
+
+    const duration = Date.now() - startTime;
+
+    if (error) {
+      console.error(`❌ Error cargando topics (${duration}ms):`, error.message);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      console.log(`📊 No hay topics en la base de datos`);
+      return;
+    }
+
+    // Cargar en memoria
+    let loaded = 0;
+    data.forEach(({ phone, topic_id }) => {
+      if (phone && topic_id) {
+        phoneToTopic.set(phone, String(topic_id));
+        topicToPhone.set(String(topic_id), phone);
+        loaded++;
+      }
+    });
+
+    console.log(`✅ ${loaded} topics cargados en memoria (${duration}ms)`);
+    console.log(`   phoneToTopic: ${phoneToTopic.size} entradas`);
+    console.log(`   topicToPhone: ${topicToPhone.size} entradas`);
+
+  } catch (err) {
+    console.error(`❌ Error crítico cargando topics:`, err.message);
+  }
+}
+
+// EJECUTAR AL INICIAR (NO BLOQUEAR EL SERVIDOR)
+preloadTopicsFromSupabase().catch(err => {
+  console.error("❌ Fallo al precargar topics:", err.message);
+});
+
 const SERVICE_BUTTON_IDS = {
   therapy: "FH_SERVICE_THERAPY",
   psychiatry: "FH_SERVICE_PSYCHIATRY",
@@ -923,6 +977,51 @@ bot.onText(/^\/reactivar\s+(\S+)$/i, async (msg, match) => {
 
   const phone = match[1].trim();
   await handleReactivarCommand(msg, phone);
+});
+
+bot.onText(/^\/sync-topics$/i, async (msg) => {
+  const chatId = String(msg.chat.id);
+  
+  if (chatId !== ADMIN && chatId !== PANEL_CHAT_ID) return;
+
+  await bot.sendMessage(chatId, "🔄 Sincronizando topics...");
+
+  try {
+    const before = phoneToTopic.size;
+    
+    const { data, error } = await supabase
+      .from("fh_topics")
+      .select("phone, topic_id");
+
+    if (error) throw error;
+
+    // Limpiar y recargar
+    phoneToTopic.clear();
+    topicToPhone.clear();
+
+    let loaded = 0;
+    data?.forEach(({ phone, topic_id }) => {
+      if (phone && topic_id) {
+        phoneToTopic.set(phone, String(topic_id));
+        topicToPhone.set(String(topic_id), phone);
+        loaded++;
+      }
+    });
+
+    await bot.sendMessage(chatId,
+      `✅ Sincronización completada\n\n` +
+      `Antes: ${before} topics\n` +
+      `Ahora: ${loaded} topics\n\n` +
+      `Caché actualizado.`,
+      msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {}
+    );
+
+  } catch (err) {
+    await bot.sendMessage(chatId,
+      `❌ Error: ${err.message}`,
+      msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {}
+    );
+  }
 });
 
 async function handleReactivarCommand(msg, phone) {
@@ -1761,92 +1860,121 @@ async function processTelegramWebhookSafe(update) {
       let phone = topicToPhone.get(topicId);
 
       if (!phone) {
-        console.log(`🔍 Buscando teléfono para topic ${topicId} en Supabase...`);
-
-        try {
-          const result = await supabaseWithTimeout(async () => {
-            return await supabase
-              .from("fh_topics")
-              .select("phone")
-              .eq("topic_id", topicId)
-              .maybeSingle();
-          }, 5000);
-
-          console.log(`📊 Resultado Supabase:`, result);
-
-          if (result?.data?.phone) {
-            phone = result.data.phone;
-            topicToPhone.set(topicId, phone);
-            phoneToTopic.set(phone, topicId);
-            console.log(`✅ Teléfono encontrado en BD: ${phone}`);
-          }
-        } catch (err) {
-          console.error(`❌ Error consultando Supabase:`, err.message);
-
-          await bot.sendMessage(PANEL_CHAT_ID,
-            `⚠️ <b>Error de base de datos</b>\n\n` +
-            `No se pudo consultar el teléfono.\n` +
-            `Error: ${err.message}\n\n` +
-            `<i>Intenta de nuevo.</i>`,
-            {
-              parse_mode: "HTML",
-              message_thread_id: topicId,
-            }
-          );
-          return;
-        }
-      } else {
-        console.log(`✅ Teléfono encontrado en caché: ${phone}`);
-      }
-
-      if (phone) {
-        console.log(`📤 REENVIANDO A WHATSAPP:`);
-        console.log(`   Desde topic: ${topicId}`);
-        console.log(`   Hacia número: ${phone}`);
-        console.log(`   Mensaje: "${text}"`);
-
-        const mediaForwarded = hasMedia
-          ? await forwardTelegramMediaToWhatsApp({ msg, phone })
-          : null;
-
-        await mergeConversationState(phone, {
-          lastMessageTime: Date.now(),
-          isHumanHandling: true,
-          awaitingScheduling: false
-        });
-
-        if (mediaForwarded) {
-          await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+        console.log(`🔍 Buscando teléfono para topic ${topicId}...`);
+        
+        // PRIMERO: Verificar caché
+        phone = topicToPhone.get(topicId);
+        
+        if (phone) {
+          console.log(`✅ Teléfono encontrado en caché: ${phone}`);
         } else {
-          await sendWhatsAppText(phone, text);
-          await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
-        }
+          // SEGUNDO: Solo si NO está en caché, consultar Supabase
+          console.log(`⚠️ Topic ${topicId} NO está en caché, consultando Supabase...`);
+          
+          try {
+            const queryStart = Date.now();
+            
+            // Timeout más corto (3 segundos)
+            const result = await Promise.race([
+              supabase
+                .from("fh_topics")
+                .select("phone")
+                .eq("topic_id", topicId)
+                .maybeSingle(),
+              
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("Timeout 3s")), 3000)
+              )
+            ]);
 
-        console.log(`✅ Mensaje reenviado exitosamente`);
+            const duration = Date.now() - queryStart;
+            console.log(`📊 Supabase respondió en ${duration}ms`);
 
-        scheduleTimeoutWarning(phone);
-
-        await bot.sendMessage(PANEL_CHAT_ID,
-          `📤 Enviado a <code>${escapeHTML(phone)}</code>\n\n` +
-          `💡 <i>Cuando termines, devuelve el control:</i>`,
-          {
-            parse_mode: "HTML",
-            message_thread_id: topicId,
-            reply_markup: {
-              inline_keyboard: [[
-                { text: "🤖 Devolver a IA", callback_data: `release_${phone}` }
-              ]]
+            if (result?.data?.phone) {
+              phone = result.data.phone;
+              // Agregar a caché
+              topicToPhone.set(topicId, phone);
+              phoneToTopic.set(phone, topicId);
+              console.log(`✅ Teléfono encontrado y cacheado: ${phone}`);
             }
+          } catch (err) {
+            console.error(`❌ Error consultando Supabase:`, err.message);
+            
+            // Notificar al panel
+            await bot.sendMessage(PANEL_CHAT_ID,
+              `⚠️ <b>Topic no encontrado</b>\n\n` +
+              `No se pudo encontrar el número para este topic.\n` +
+              `Topic ID: ${topicId}\n\n` +
+              `<b>Soluciones:</b>\n` +
+              `1. Usa /sync-topics para recargar\n` +
+              `2. Cierra y reabre el topic\n` +
+              `3. Contacta al administrador`,
+              {
+                parse_mode: "HTML",
+                message_thread_id: topicId,
+              }
+            );
+            return; // Salir
+          }
+        }
+      }
+
+      // Si llegamos aquí sin phone, mostrar error
+      if (!phone) {
+        console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
+        
+        await bot.sendMessage(PANEL_CHAT_ID,
+          `⚠️ <b>Error crítico</b>\n\n` +
+          `No existe mapeo para este topic en la base de datos.\n` +
+          `Topic ID: ${topicId}\n\n` +
+          `Este topic puede estar corrupto o fue eliminado.`,
+          { 
+            parse_mode: "HTML",
+            message_thread_id: topicId 
           }
         );
-      } else {
-        console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
-
-        await bot.sendMessage(PANEL_CHAT_ID,
-          `⚠️ Error: No se encontró el número de teléfono asociado a este topic.\nTopic ID: ${topicId}`,
-          { message_thread_id: topicId }
-        );
+        return;
       }
+
+      console.log(`📤 REENVIANDO A WHATSAPP:`);
+      console.log(`   Desde topic: ${topicId}`);
+      console.log(`   Hacia número: ${phone}`);
+      console.log(`   Mensaje: "${text}"`);
+
+      const mediaForwarded = hasMedia
+        ? await forwardTelegramMediaToWhatsApp({ msg, phone })
+        : null;
+
+      await mergeConversationState(phone, {
+        lastMessageTime: Date.now(),
+        isHumanHandling: true,
+        awaitingScheduling: false
+      });
+
+      if (mediaForwarded) {
+        await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+      } else {
+        await sendWhatsAppText(phone, text);
+        await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+      }
+
+      console.log(`✅ Mensaje reenviado exitosamente`);
+
+      scheduleTimeoutWarning(phone);
+
+      await bot.sendMessage(PANEL_CHAT_ID,
+        `📤 Enviado a <code>${escapeHTML(phone)}</code>\n\n` +
+        `💡 <i>Cuando termines, devuelve el control:</i>`,
+        {
+          parse_mode: "HTML",
+          message_thread_id: topicId,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "🤖 Devolver a IA", callback_data: `release_${phone}` }
+            ]]
+          }
+        }
+      );
     }
 
   } catch (err) {
