@@ -144,12 +144,10 @@ export async function generateAIReply({ text, conversationContext = null, phone 
 
   // DETECCIÓN DE SERVICIOS NO OFRECIDOS
   const unavailableServiceKeywords = [
-    /\b(autis[mt]|tea|espectro autista|asperger)\b/i,
     /\b(neuropsicolog[íi]a|evaluaci[óo]n neurol[óo]gica)\b/i,
     /\b(terapia ocupacional|ocupacional)\b/i,
     /\b(psicopedag[óo]gico|psicopedagog[íi]a|dislexia|tdah)\b/i,
     /\b(terapia aba|aba therapy|intervenci[óo]n temprana)\b/i,
-    /\b(ni[ñn]o autista|beb[eé] autista|hijo autista)\b/i,
     /\b(terapia infantil|ni[ñn]os peque[ñn]os|beb[eée]s)\b/i
   ];
 
