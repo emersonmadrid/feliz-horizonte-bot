@@ -6,6 +6,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getPromptConfig } from "../prompts/prompt-loader.js";
 import { buildPrompt, sanitizeGeminiApiKey } from "../utils/ai.utils.js";
 import { mergeConversationState } from "./state.service.js";
+import { findLearnedResponse, markResponseUsed } from "./learning.service.js";
 import {
   saveMessage,
   getConversationHistory,
@@ -41,6 +42,61 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       contextPrompt = formatHistoryForPrompt(history);
       // ... (código existente de estadísticas) ...
     }
+  }
+
+  // 2. BUSCAR RESPUESTA APRENDIDA (NUEVO)
+  const learnedResponse = await findLearnedResponse(text);
+
+  if (learnedResponse) {
+    console.log(`🧠 Respuesta aprendida encontrada (ID: ${learnedResponse.id})`);
+    console.log(`   Se usará como referencia para humanizar, no como copia directa`);
+
+    // Incrementar contador de uso
+    await markResponseUsed(learnedResponse.id);
+
+    // AGREGAR CONTEXTO ESPECIAL para que la IA humanice
+    contextPrompt += `
+
+=== INFORMACIÓN VALIDADA POR HUMANO (FUENTE DE VERDAD) ===
+`;
+    contextPrompt += `Pregunta similar previa: "${learnedResponse.question_pattern}"
+
+`;
+    contextPrompt += `Respuesta que dio nuestro equipo humano:
+"${learnedResponse.human_response}"
+
+`;
+    contextPrompt += `INSTRUCCIONES CRÍTICAS PARA TI:
+`;
+    contextPrompt += `- USA la información de arriba como base factual (nombres, teléfonos, datos exactos)
+`;
+    contextPrompt += `- MANTÉN todos los datos exactos sin cambiarlos
+`;
+    contextPrompt += `- ADAPTA el tono y estructura a la pregunta actual del cliente
+`;
+    contextPrompt += `- HAZ que tu respuesta suene natural, empática y NO robótica
+`;
+    contextPrompt += `- NO copies textualmente, reescribe con tus palabras manteniendo los datos
+`;
+    contextPrompt += `- AGREGA contexto personal si el cliente lo proporcionó (ej: "para mi hijo")
+`;
+    contextPrompt += `- Si es apropiado, HAZ una pregunta de seguimiento relevante
+`;
+    contextPrompt += `- Cada respuesta debe ser ÚNICA, aunque la info base sea la misma
+`;
+    contextPrompt += `==========================================================
+
+`;
+
+    // Marcar en el contexto que hay respuesta aprendida
+    conversationContext = {
+      ...conversationContext,
+      hasLearnedReference: true,
+      learnedResponseId: learnedResponse.id,
+      learnedCategory: learnedResponse.category
+    };
+
+    // NO hacer return aquí, continuar con generación normal de IA
   }
 
   // --- NUEVO CÓDIGO INICIO: Inyectar disponibilidad en el contexto ---
@@ -556,7 +612,19 @@ if (availabilityKeywords.test(text)) {
 
     console.log(`📊 Meta final:`, JSON.stringify(meta));
 
-    return { message: finalMessage, meta };
+    return {
+      message: finalMessage,
+      meta: {
+        intent: meta?.intent || "info",
+        priority: meta?.priority || "low",
+        notify_human: meta?.notify_human || false,
+        service: meta?.service || null,
+        suggested_actions: meta?.suggested_actions || [],
+        confidence: conversationContext?.hasLearnedReference ? 0.95 : (meta?.confidence || 0.6),
+        based_on_learned_response: conversationContext?.hasLearnedReference || false,
+        learned_response_id: conversationContext?.learnedResponseId || null
+      }
+    };
   } catch (e) {
     console.error("❌ AI error:", e?.message);
     return {

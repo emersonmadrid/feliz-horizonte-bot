@@ -7,12 +7,18 @@ import { createClient } from "@supabase/supabase-js";
 import TelegramBot from "node-telegram-bot-api";
 import { generateAIReply, synthesizeAudioFromText, transcribeAudioBuffer } from "./services/ai.service.js";
 import {
+  saveLearnedResponse,
+  listLearnedResponses,
+  deactivateLearnedResponse
+} from "./services/learning.service.js";
+import {
   deleteConversationState,
   getConversationState,
   getStateMetrics,
   listActiveConversations,
   mergeConversationState,
 } from "./services/state.service.js";
+import { getConversationHistory } from "./services/conversation-history.service.js";
 import { buildHealthPayload, getBotMode } from "./utils/health.utils.js";
 
 dotenv.config();
@@ -1077,6 +1083,107 @@ async function handleCallbackQuery(query) {
       console.log(`⏰ Timeout extendido para ${phone}`);
     }
 
+    // NUEVO: Guardar aprendizaje confirmado
+    else if (data.startsWith('save_learn_')) {
+      const parts = data.replace('save_learn_', '').split('_');
+      const phone = parts[0];
+
+      try {
+        // Obtener mensaje del topic
+        const selectedMessage = query.message.reply_to_message?.text ||
+                              query.message.text.match(/"Tu respuesta[^\"]*:\n\"([^\"]+)\"/)?.[1];
+
+        if (!selectedMessage) {
+          throw new Error("No se pudo recuperar el mensaje seleccionado");
+        }
+
+        // Obtener pregunta original
+        const history = await getConversationHistory(phone, 20);
+        const lastUserMessage = [...history].reverse().find(m => m.role === 'user');
+
+        // Guardar respuesta aprendida
+        const learned = await saveLearnedResponse({
+          question: lastUserMessage.content,
+          humanResponse: selectedMessage,
+          phone,
+          agentUsername: query.from?.username || query.from?.first_name,
+          category: "human_validated",
+          conversationContext: history.slice(-10)
+        });
+
+        if (learned) {
+          await bot.editMessageText(
+            query.message.text + `\n\n✅ <b>¡Guardado exitosamente!</b>\n` +
+            `🆔 ID: ${learned.id}\n` +
+            `🏷️ Keywords: ${learned.keywords.join(", ")}\n` +
+            `📊 Usadas: ${learned.times_used} veces`,
+            {
+              chat_id: query.message.chat.id,
+              message_id: query.message.message_id,
+              message_thread_id: query.message.message_thread_id,
+              parse_mode: "HTML",
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: "🗑️ Eliminar", callback_data: `delete_learned_${learned.id}` }
+                ]]
+              }
+            }
+          );
+
+          await bot.answerCallbackQuery(query.id, {
+            text: "✅ Aprendizaje guardado",
+            show_alert: false
+          });
+        }
+      } catch (err) {
+        console.error("❌ Error guardando aprendizaje:", err.message);
+        await bot.answerCallbackQuery(query.id, {
+          text: "❌ Error guardando: " + err.message,
+          show_alert: true
+        });
+      }
+    }
+
+    // NUEVO: Cancelar aprendizaje
+    else if (data.startsWith('cancel_learn_')) {
+      await bot.editMessageText(
+        query.message.text + `\n\n❌ <i>Aprendizaje cancelado</i>`,
+        {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          message_thread_id: query.message.message_thread_id,
+          parse_mode: "HTML"
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, {
+        text: "Cancelado",
+        show_alert: false
+      });
+    }
+
+    // NUEVO: Eliminar respuesta aprendida
+    else if (data.startsWith('delete_learned_')) {
+      const responseId = parseInt(data.replace('delete_learned_', ''));
+
+      await deactivateLearnedResponse(responseId);
+
+      await bot.editMessageText(
+        query.message.text + `\n\n❌ <i>Respuesta desactivada</i>`,
+        {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          message_thread_id: query.message.message_thread_id,
+          parse_mode: "HTML"
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, {
+        text: "✅ Respuesta eliminada",
+        show_alert: false
+      });
+    }
+
   } catch (err) {
     console.error('❌ Error en callback_query:', err.message);
     await bot.answerCallbackQuery(query.id, {
@@ -1156,6 +1263,109 @@ bot.onText(/^\/estado$/i, async (msg) => {
       message_thread_id: msg.message_thread_id
     }
   );
+});
+
+// COMANDO: /aprender - Guarda respuesta seleccionada manualmente
+bot.onText(/^\/aprender$/i, async (msg) => {
+  const chatId = String(msg.chat.id);
+  const topicId = msg.message_thread_id;
+
+  if (chatId !== PANEL_CHAT_ID || !topicId) return;
+
+  const phone = topicToPhone.get(String(topicId));
+  if (!phone) {
+    return bot.sendMessage(chatId,
+      "⚠️ No se encontró el teléfono asociado a este topic.",
+      { message_thread_id: topicId }
+    );
+  }
+
+  // CRÍTICO: Verificar que esté respondiendo a un mensaje
+  if (!msg.reply_to_message) {
+    return bot.sendMessage(chatId,
+      `❌ <b>Debes RESPONDER al mensaje que quieres guardar</b>\n\n` +
+      `<b>Cómo usar:</b>\n` +
+      `1. Encuentra TU mensaje que contiene la respuesta útil\n` +
+      `2. Da clic en "Responder" (Reply) a ese mensaje\n` +
+      `3. En la respuesta escribe: /aprender\n\n` +
+      `<i>Ejemplo: Si escribiste "No hacemos TEA pero...", responde a ESE mensaje con /aprender</i>`,
+      {
+        parse_mode: "HTML",
+        message_thread_id: topicId
+      }
+    );
+  }
+
+  const selectedMessage = msg.reply_to_message.text;
+  
+  if (!selectedMessage || selectedMessage.length < 20) {
+    return bot.sendMessage(chatId,
+      "⚠️ El mensaje seleccionado es muy corto o vacío. Debe ser una respuesta completa.",
+      { message_thread_id: topicId }
+    );
+  }
+
+  // Obtener pregunta original del cliente
+  const history = await getConversationHistory(phone, 20);
+  const lastUserMessage = [...history].reverse().find(m => m.role === 'user');
+
+  if (!lastUserMessage) {
+    return bot.sendMessage(chatId,
+      "⚠️ No se encontró la pregunta original del cliente en el historial.",
+      { message_thread_id: topicId }
+    );
+  }
+
+  // Obtener contexto completo
+  const conversationContext = history.slice(-10);
+
+  // Mostrar preview y pedir confirmación
+  await bot.sendMessage(chatId,
+    `📝 <b>Vista previa del aprendizaje:</b>\n\n` +
+    `<b>Pregunta del cliente:</b>\n` +
+    `"${lastUserMessage.content.substring(0, 150)}${lastUserMessage.content.length > 150 ? '...' : ''}"\n\n` +
+    `<b>Tu respuesta (que se guardará):</b>\n` +
+    `"${selectedMessage.substring(0, 300)}${selectedMessage.length > 300 ? '...' : ''}"\n\n` +
+    `<i>¿Es correcta esta información?</i>`,
+    {
+      parse_mode: "HTML",
+      message_thread_id: topicId,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Sí, guardar", callback_data: `save_learn_${phone}_${msg.reply_to_message.message_id}` }
+          ],
+          [
+            { text: "❌ Cancelar", callback_data: `cancel_learn_${phone}` }
+          ]
+        ]
+      }
+    }
+  );
+});
+
+// COMANDO: /ver_aprendido - Lista respuestas aprendidas
+bot.onText(/^\/ver_aprendido$/i, async (msg) => {
+  const chatId = String(msg.chat.id);
+  
+  if (chatId !== ADMIN && chatId !== PANEL_CHAT_ID) return;
+
+  const learned = await listLearnedResponses(20);
+  
+  if (learned.length === 0) {
+    return bot.sendMessage(chatId, "📚 Aún no hay respuestas aprendidas.");
+  }
+
+  let message = `📚 <b>Respuestas aprendidas (${learned.length})</b>\n\n`;
+  
+  learned.forEach((item, idx) => {
+    message += `${idx + 1}. <b>ID ${item.id}</b> (usado ${item.times_used} veces)\n`;
+    message += `   🏷️ ${item.keywords.join(", ")}\n`;
+    message += `   📝 "${item.question_pattern.substring(0, 60)}..."\n`;
+    message += `   💬 "${item.human_response.substring(0, 60)}..."\n\n`;
+  });
+
+  await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
 });
 
 // TG → WA con filtro de mensajes ofensivos
@@ -1454,6 +1664,16 @@ app.post("/telegram/webhook", async (req, res) => {
             message_thread_id: topicId
           }
         );
+        return;
+      }
+
+      if (text === '/aprender' && chatId === PANEL_CHAT_ID && topicId) {
+        bot.processUpdate(update);
+        return;
+      }
+
+      if (text === '/ver_aprendido' && (chatId === ADMIN || chatId === PANEL_CHAT_ID)) {
+        bot.processUpdate(update);
         return;
       }
 
@@ -1982,6 +2202,46 @@ app.get("/admin/state-metrics", async (req, res) => {
 
   return res.json({
     ...getStateMetrics(),
+  });
+});
+
+// Endpoint para ver respuestas aprendidas
+app.get("/admin/learned-responses", async (req, res) => {
+  const { admin_key } = req.query;
+
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  const responses = await listLearnedResponses(100);
+  
+  return res.json({
+    total: responses.length,
+    responses: responses.map(r => ({
+      id: r.id,
+      keywords: r.keywords,
+      question: r.question_pattern.substring(0, 100),
+      response: r.human_response.substring(0, 100),
+      times_used: r.times_used,
+      confidence: r.confidence_score,
+      created_at: r.created_at
+    }))
+  });
+});
+
+// Endpoint para eliminar respuesta aprendida
+app.post("/admin/delete-learned-response", async (req, res) => {
+  const { admin_key, response_id } = req.body;
+
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  await deactivateLearnedResponse(response_id);
+  
+  return res.json({
+    success: true,
+    message: `Respuesta ${response_id} desactivada`
   });
 });
 
