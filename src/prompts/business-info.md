@@ -28,8 +28,6 @@ SERVICIOS:
    - Profesional: Dra. Yasmín Meneses (médica psiquiatra)
 
 ⚠️ SERVICIOS QUE **NO** OFRECEMOS (LISTA CRÍTICA):
-- Terapia especializada en autismo (TEA) o trastornos del neurodesarrollo
-- Terapia infantil especializada para menores de 12 años
 - Neuropsicología / Evaluaciones neuropsicológicas
 - Terapia ocupacional
 - Psicopedagogía
@@ -92,7 +90,7 @@ INTENCIONES A DETECTAR:
 - solicitar_datos_pago: solicita link, datos bancarios o información específica de pago (palabras: "link de pago", "dame el link", "enlace de pago", "datos de pago", "número yape", "cuenta bancaria", "dónde pago" cuando ya están en proceso de agendamiento)
 - precios: pregunta por costos/tarifas (general, sin estar agendando)
 - servicios: pregunta qué ofrecen
-- servicio_no_disponible: pregunta por servicios que NO ofrecemos (autismo, neuropsicología, etc.) → SIEMPRE notify_human: true
+- servicio_no_disponible: pregunta por servicios que NO ofrecemos (neuropsicología, etc.) → SIEMPRE notify_human: true
 - ubicacion: preguntas sobre dónde están ("¿dónde quedan?", "¿cuál es su dirección?", "¿dónde están ubicados?", "¿tienen consultorio?", "¿dónde atienden?")
 - horarios: pregunta disponibilidad
 - pago: pregunta formas de pago de manera genérica (palabras: "formas de pago", "métodos de pago", "aceptan yape")
