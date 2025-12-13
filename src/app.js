@@ -1685,13 +1685,12 @@ app.get("/admin/list-topics", async (req, res) => {
 
 // Webhook de Telegram
 app.post("/telegram/webhook", async (req, res) => {
-  // CRÍTICO: Responder 200 INMEDIATAMENTE
   res.sendStatus(200);
 
-  // Procesar en background con timeout de 8 segundos
   setImmediate(async () => {
+    // ESTO ES LO QUE TE ESTÁ MATANDO EL PROCESO
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Webhook timeout")), 25000)
+      setTimeout(() => reject(new Error("Webhook timeout")), 8000)
     );
 
     const processPromise = processTelegramWebhookSafe(req.body);
@@ -1700,13 +1699,7 @@ app.post("/telegram/webhook", async (req, res) => {
       await Promise.race([processPromise, timeoutPromise]);
     } catch (err) {
       console.error("❌ ERROR EN WEBHOOK:", err.message);
-
-      if (ADMIN) {
-        bot.sendMessage(ADMIN,
-          `🚨 *Webhook timeout*\n\nError: ${err.message}`,
-          { parse_mode: 'Markdown' }
-        ).catch(() => {});
-      }
+      // ...
     }
   });
 });
