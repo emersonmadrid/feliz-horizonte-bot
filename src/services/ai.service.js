@@ -86,6 +86,59 @@ export async function generateAIReply({ text, conversationContext = null, phone 
     }
   }
 
+  // DETECCIÓN DE SERVICIOS NO OFRECIDOS
+  const unavailableServiceKeywords = [
+    /\b(autis[mt]|tea|espectro autista|asperger)\b/i,
+    /\b(neuropsicolog[íi]a|evaluaci[óo]n neurol[óo]gica)\b/i,
+    /\b(terapia ocupacional|ocupacional)\b/i,
+    /\b(psicopedag[óo]gico|psicopedagog[íi]a|dislexia|tdah)\b/i,
+    /\b(terapia aba|aba therapy|intervenci[óo]n temprana)\b/i,
+    /\b(ni[ñn]o autista|beb[eé] autista|hijo autista)\b/i,
+    /\b(terapia infantil|ni[ñn]os peque[ñn]os|beb[eée]s)\b/i
+  ];
+
+  const isUnavailableService = unavailableServiceKeywords.some(regex => regex.test(text));
+
+  if (isUnavailableService) {
+    console.log(`⚠️ Servicio no disponible detectado: ${phone}`);
+
+    const unavailableMessage =
+      "Actualmente no contamos con ese servicio especializado. " +
+      "Sin embargo, déjame conectarte con el equipo para que puedan " +
+      "orientarte sobre profesionales especializados que puedan ayudarte. 💙";
+
+    // Guardar en historial
+    if (phone) {
+      await saveMessage({
+        phone,
+        role: 'user',
+        content: text,
+        intent: 'servicio_no_disponible',
+        service: null
+      });
+
+      await saveMessage({
+        phone,
+        role: 'assistant',
+        content: unavailableMessage,
+        intent: 'servicio_no_disponible',
+        service: null
+      });
+    }
+
+    return {
+      message: unavailableMessage,
+      meta: {
+        intent: "servicio_no_disponible",
+        priority: "high",
+        notify_human: true,
+        service: null,
+        suggested_actions: ["transfer_to_specialist"],
+        confidence: 0.95
+      }
+    };
+  }
+
   try {
     // 3. GENERAR RESPUESTA CON CONTEXTO COMPLETO
     const { prompt: businessPrompt, versionTag, source } = await getPromptConfig();
