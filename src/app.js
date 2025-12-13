@@ -1683,33 +1683,23 @@ app.get("/admin/list-topics", async (req, res) => {
   }
 });
 
-// Webhook de Telegram
+// CÓDIGO NUEVO (CORREGIDO)
 app.post("/telegram/webhook", async (req, res) => {
-  // 1. Responder OK a Telegram inmediatamente para evitar reintentos
-  res.sendStatus(200);
+  res.sendStatus(200); // Responder OK rápido a Telegram
 
-  // 2. Procesar el mensaje en segundo plano SIN límite de tiempo artificial
-  const body = req.body; // Capturar el body antes de perder el contexto
-  
-  // Usar setImmediate para liberar la respuesta HTTP
+  const body = req.body; // Guardar datos
+
   setImmediate(async () => {
     try {
-      console.log("🔄 Procesando webhook en background...");
+      console.log("🔄 Procesando webhook Telegram...");
+      // Ejecutar SIN límite de tiempo artificial
       await processTelegramWebhookSafe(body);
-      console.log("✅ Webhook procesado correctamente");
+      console.log("✅ Webhook Telegram completado");
     } catch (err) {
-      console.error("❌ Error procesando mensaje de Telegram:", err.message);
-      
-      // Opcional: Notificar al admin si es un error crítico
-      if (process.env.TELEGRAM_ADMIN_CHAT_ID) {
-         bot.sendMessage(process.env.TELEGRAM_ADMIN_CHAT_ID, 
-           `⚠️ Error en bot: ${err.message}`
-         ).catch(() => {});
-      }
+      console.error("❌ Error en webhook Telegram:", err.message);
     }
   });
 });
-
 async function processTelegramWebhookSafe(update) {
   try {
     console.log("📥 TELEGRAM WEBHOOK RECIBIDO:", JSON.stringify(update, null, 2));
