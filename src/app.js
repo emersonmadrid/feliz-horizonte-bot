@@ -43,7 +43,30 @@ const {
 const ENABLE_AUDIO_TRANSCRIPTION = (process.env.WHATSAPP_AUDIO_TRANSCRIPTION ?? "1") === "1";
 const ENABLE_AUDIO_RESPONSES = (process.env.WHATSAPP_AUDIO_RESPONSES ?? "0") === "1";
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  db: {
+    schema: "public"
+  },
+  auth: {
+    persistSession: false
+  },
+  global: {
+    headers: {
+      "x-client-info": "fh-bot/1.0",
+      "Connection": "keep-alive"
+    }
+  }
+});
+
+// Wrapper para queries con timeout manual
+async function supabaseWithTimeout(queryFn, timeoutMs = 5000) {
+  return Promise.race([
+    queryFn(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Supabase timeout")), timeoutMs)
+    )
+  ]);
+}
 
 const isProd = VERCEL === "1" && VERCEL_ENV === "production";
 const isPreview = VERCEL === "1" && VERCEL_ENV !== "production";
@@ -57,16 +80,21 @@ async function checkSupabaseConnection() {
   }
 
   try {
-    const { error } = await supabase
-      .from("fh_topics")
-      .select("id", { head: true, count: "exact" })
-      .limit(1);
+    const startTime = Date.now();
+    const { error } = await supabaseWithTimeout(async () => {
+      return await supabase
+        .from("fh_topics")
+        .select("id", { head: true, count: "exact" })
+        .limit(1);
+    }, 3000);
+
+    const responseTime = Date.now() - startTime;
 
     if (error) {
-      return { ok: false, error: error.message };
+      return { ok: false, error: error.message, responseTime };
     }
 
-    return { ok: true };
+    return { ok: true, responseTime };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1558,14 +1586,36 @@ app.get("/admin/list-topics", async (req, res) => {
 
 // Webhook de Telegram
 app.post("/telegram/webhook", async (req, res) => {
-  // CRÍTICO: Responder inmediatamente
+  // CRÍTICO: Responder 200 INMEDIATAMENTE
   res.sendStatus(200);
 
+  // Procesar en background con timeout de 8 segundos
+  setImmediate(async () => {
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Webhook timeout")), 8000)
+    );
+
+    const processPromise = processTelegramWebhookSafe(req.body);
+
+    try {
+      await Promise.race([processPromise, timeoutPromise]);
+    } catch (err) {
+      console.error("❌ ERROR EN WEBHOOK:", err.message);
+
+      if (ADMIN) {
+        bot.sendMessage(ADMIN,
+          `🚨 *Webhook timeout*\n\nError: ${err.message}`,
+          { parse_mode: 'Markdown' }
+        ).catch(() => {});
+      }
+    }
+  });
+});
+
+async function processTelegramWebhookSafe(update) {
   try {
-    const update = req.body;
     console.log("📥 TELEGRAM WEBHOOK RECIBIDO:", JSON.stringify(update, null, 2));
 
-    // Procesar callbacks
     if (update?.callback_query) {
       console.log("📲 Procesando callback_query");
       await handleCallbackQuery(update.callback_query);
@@ -1595,11 +1645,9 @@ app.post("/telegram/webhook", async (req, res) => {
       return;
     }
 
-    // ===== PROCESAR COMANDOS MANUALMENTE =====
     if (text.startsWith("/")) {
       console.log(`🤖 Comando detectado: ${text}`);
 
-      // Comando /reactivar
       const reactivarMatch = text.match(/^\/reactivar\s+(\S+)$/i);
       if (reactivarMatch) {
         const phone = reactivarMatch[1].trim();
@@ -1607,7 +1655,6 @@ app.post("/telegram/webhook", async (req, res) => {
         return;
       }
 
-      // Comando /auto
       if (text === '/auto' && chatId === PANEL_CHAT_ID && topicId) {
         const phone = topicToPhone.get(topicId);
         if (!phone) {
@@ -1638,7 +1685,6 @@ app.post("/telegram/webhook", async (req, res) => {
         return;
       }
 
-      // Comando /estado
       if (text === '/estado' && chatId === PANEL_CHAT_ID && topicId) {
         const phone = topicToPhone.get(topicId);
         if (!phone) {
@@ -1677,15 +1723,13 @@ app.post("/telegram/webhook", async (req, res) => {
         return;
       }
 
-      // Otros comandos: pasar a bot.processUpdate() (solo para admin)
       if (chatId === ADMIN) {
         bot.processUpdate(update);
       }
       return;
     }
 
-    // ===== PROCESAR MENSAJES NORMALES (no comandos) =====
-    if (chatId === PANEL_CHAT_ID && topicId && (text || msg.document || msg.video || msg.photo)) {
+    if (chatId === PANEL_CHAT_ID && topicId && (text || hasMedia)) {
       if (text && containsOffensiveLanguage(text)) {
         console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
         await bot.sendMessage(PANEL_CHAT_ID,
@@ -1718,17 +1762,38 @@ app.post("/telegram/webhook", async (req, res) => {
 
       if (!phone) {
         console.log(`🔍 Buscando teléfono para topic ${topicId} en Supabase...`);
-        const { data: row } = await supabase
-          .from("fh_topics")
-          .select("phone")
-          .eq("topic_id", topicId)
-          .maybeSingle();
 
-        if (row?.phone) {
-          phone = row.phone;
-          topicToPhone.set(topicId, phone);
-          phoneToTopic.set(phone, topicId);
-          console.log(`✅ Teléfono encontrado en BD: ${phone}`);
+        try {
+          const result = await supabaseWithTimeout(async () => {
+            return await supabase
+              .from("fh_topics")
+              .select("phone")
+              .eq("topic_id", topicId)
+              .maybeSingle();
+          }, 5000);
+
+          console.log(`📊 Resultado Supabase:`, result);
+
+          if (result?.data?.phone) {
+            phone = result.data.phone;
+            topicToPhone.set(topicId, phone);
+            phoneToTopic.set(phone, topicId);
+            console.log(`✅ Teléfono encontrado en BD: ${phone}`);
+          }
+        } catch (err) {
+          console.error(`❌ Error consultando Supabase:`, err.message);
+
+          await bot.sendMessage(PANEL_CHAT_ID,
+            `⚠️ <b>Error de base de datos</b>\n\n` +
+            `No se pudo consultar el teléfono.\n` +
+            `Error: ${err.message}\n\n` +
+            `<i>Intenta de nuevo.</i>`,
+            {
+              parse_mode: "HTML",
+              message_thread_id: topicId,
+            }
+          );
+          return;
         }
       } else {
         console.log(`✅ Teléfono encontrado en caché: ${phone}`);
@@ -1759,7 +1824,6 @@ app.post("/telegram/webhook", async (req, res) => {
 
         console.log(`✅ Mensaje reenviado exitosamente`);
 
-        // Programar timeout automático
         scheduleTimeoutWarning(phone);
 
         await bot.sendMessage(PANEL_CHAT_ID,
@@ -1785,10 +1849,11 @@ app.post("/telegram/webhook", async (req, res) => {
       }
     }
 
-  } catch (e) {
-    console.error("❌ TG WEBHOOK ERROR:", e);
+  } catch (err) {
+    console.error("❌ Error en processTelegramWebhookSafe:", err);
+    throw err;
   }
-});
+}
 
 // Webhook de WhatsApp (GET - verificación)
 app.get("/webhook/whatsapp", (req, res) => {
@@ -2243,6 +2308,51 @@ app.post("/admin/delete-learned-response", async (req, res) => {
     success: true,
     message: `Respuesta ${response_id} desactivada`
   });
+});
+
+app.post("/admin/sync-topics", async (req, res) => {
+  const { admin_key } = req.body;
+
+  if (admin_key !== process.env.ADMIN_SETUP_KEY) {
+    return res.status(403).json({ error: "No autorizado" });
+  }
+
+  try {
+    console.log(`🔄 Sincronizando topics desde Supabase...`);
+
+    const { data, error } = await supabaseWithTimeout(async () => {
+      return await supabase
+        .from("fh_topics")
+        .select("phone, topic_id");
+    }, 10000);
+
+    if (error) throw error;
+
+    phoneToTopic.clear();
+    topicToPhone.clear();
+
+    data?.forEach(({ phone, topic_id }) => {
+      phoneToTopic.set(phone, String(topic_id));
+      topicToPhone.set(String(topic_id), phone);
+    });
+
+    console.log(`✅ ${data?.length || 0} topics sincronizados`);
+
+    return res.json({
+      success: true,
+      synced: data?.length || 0,
+      cache: {
+        phoneToTopic: phoneToTopic.size,
+        topicToPhone: topicToPhone.size
+      }
+    });
+
+  } catch (err) {
+    console.error(`❌ Error sincronizando topics:`, err);
+    return res.status(500).json({
+      error: err.message
+    });
+  }
 });
 
 // Export para Vercel / local
