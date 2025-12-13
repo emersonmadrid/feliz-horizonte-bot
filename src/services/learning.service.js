@@ -18,7 +18,6 @@ function extractKeywords(text) {
   const keywords = [];
   
   // Servicios específicos NO ofrecidos
-  if (/autis|tea|espectro/.test(normalized)) keywords.push("autismo", "tea");
   if (/neuropsicolog/.test(normalized)) keywords.push("neuropsicologia");
   if (/terapia ocupacional|ocupacional/.test(normalized)) keywords.push("terapia_ocupacional");
   if (/psicopedag|dislexia|tdah|deficit/.test(normalized)) keywords.push("psicopedagogia", "aprendizaje");

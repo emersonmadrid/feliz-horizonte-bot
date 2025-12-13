@@ -31,7 +31,6 @@ SERVICIOS:
 - Neuropsicología / Evaluaciones neuropsicológicas
 - Terapia ocupacional
 - Psicopedagogía
-- Evaluaciones diagnósticas especializadas (TDAH, dislexia, etc.)
 - Terapia ABA (Applied Behavior Analysis)
 - Intervención temprana para bebés/niños pequeños
 
