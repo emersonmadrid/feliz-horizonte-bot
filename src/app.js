@@ -1691,7 +1691,7 @@ app.post("/telegram/webhook", async (req, res) => {
   // Procesar en background con timeout de 8 segundos
   setImmediate(async () => {
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Webhook timeout")), 8000)
+      setTimeout(() => reject(new Error("Webhook timeout")), 25000)
     );
 
     const processPromise = processTelegramWebhookSafe(req.body);
