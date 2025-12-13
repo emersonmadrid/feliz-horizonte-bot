@@ -210,7 +210,7 @@ async function sendWhatsAppTemplate(to, templateName) {
     type: "template",
     template: {
       name: templateName,
-      language: { code: "es" },
+      language: { code: "es_PE" },
     },
   };
   const headers = { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` };
