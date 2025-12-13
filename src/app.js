@@ -897,59 +897,110 @@ async function handleReactivarCommand(msg, phone) {
   const opts = topicId ? { message_thread_id: topicId } : {};
 
   console.log(`📨 Procesando /reactivar para ${phone}`);
+  console.log(`   Chat ID: ${chatId}`);
+  console.log(`   Topic ID: ${topicId}`);
+  console.log(`   Admin: ${ADMIN}`);
+  console.log(`   Panel: ${PANEL_CHAT_ID}`);
 
   // Validar permisos
   if (chatId !== ADMIN && chatId !== PANEL_CHAT_ID) {
-    return bot.sendMessage(chatId, "❌ No autorizado.", opts);
+    console.log(`❌ Chat no autorizado: ${chatId}`);
+    try {
+      await bot.sendMessage(chatId, "❌ No autorizado.", opts);
+    } catch (err) {
+      console.error(`❌ Error enviando mensaje de no autorizado:`, err.message);
+    }
+    return;
   }
 
   // Validar formato de número
   if (!/^\d{8,15}$/.test(phone)) {
-    return bot.sendMessage(chatId, 
-      `❌ Número inválido: "${phone}"\n` +
-      `Debe tener solo dígitos (8-15 caracteres)\n` +
-      `Ejemplo: /reactivar 51999999999`,
-      opts
-    );
+    console.log(`❌ Número inválido: ${phone}`);
+    try {
+      await bot.sendMessage(chatId, 
+        `❌ Número inválido: "${phone}"\n` +
+        `Debe tener solo dígitos (8-15 caracteres)\n` +
+        `Ejemplo: /reactivar 51999999999`,
+        opts
+      );
+    } catch (err) {
+      console.error(`❌ Error enviando mensaje de validación:`, err.message);
+    }
+    return;
   }
+
+  console.log(`✅ Validaciones pasadas, iniciando envío...`);
 
   try {
     // 1. Informar inicio
-    await bot.sendMessage(chatId, 
-      `⏳ Enviando plantilla "reanudar_chat" a ${phone}...\n\n` +
-      `Esto puede tardar unos segundos.`,
-      opts
-    );
+    console.log(`📤 PASO 1: Enviando mensaje de inicio a Telegram...`);
+    console.log(`   Chat: ${chatId}, Topic: ${topicId}`);
+    
+    try {
+      await bot.sendMessage(chatId, 
+        `⏳ Enviando plantilla "reanudar_chat" a ${phone}...\n\n` +
+        `Esto puede tardar unos segundos.`,
+        opts
+      );
+      console.log(`✅ Mensaje de inicio enviado exitosamente`);
+    } catch (tgErr) {
+      console.error(`❌ ERROR CRÍTICO: No se pudo enviar mensaje de inicio a Telegram`);
+      console.error(`   Error: ${tgErr.message}`);
+      console.error(`   Stack: ${tgErr.stack}`);
+      // Continuar con el envío del template de todos modos
+    }
 
     // 2. Enviar template con retry
+    console.log(`📤 PASO 2: Iniciando envío de template a WhatsApp...`);
     const result = await sendWhatsAppTemplate(phone, "reanudar_chat");
+    console.log(`✅ Template enviado exitosamente:`, result);
     
     // 3. Confirmar éxito
-    await bot.sendMessage(chatId, 
-      `✅ *Plantilla enviada exitosamente*\n\n` +
-      `📱 Número: ${phone}\n` +
-      `📋 Template: reanudar_chat\n` +
-      `🆔 Message ID: ${result?.messages?.[0]?.id || 'N/A'}`,
-      { ...opts, parse_mode: 'Markdown' }
-    );
+    console.log(`📤 PASO 3: Enviando confirmación a Telegram...`);
+    try {
+      await bot.sendMessage(chatId, 
+        `✅ *Plantilla enviada exitosamente*\n\n` +
+        `📱 Número: ${phone}\n` +
+        `📋 Template: reanudar_chat\n` +
+        `🆔 Message ID: ${result?.messages?.[0]?.id || 'N/A'}`,
+        { ...opts, parse_mode: 'Markdown' }
+      );
+      console.log(`✅ Confirmación enviada exitosamente`);
+    } catch (tgErr) {
+      console.error(`❌ Error enviando confirmación a Telegram:`, tgErr.message);
+    }
 
-    console.log(`✅ /reactivar completado para ${phone}`);
+    console.log(`✅ /reactivar completado exitosamente para ${phone}`);
 
   } catch (err) {
     const errorMsg = err?.message || "Error desconocido";
-    console.error("❌ Error en /reactivar:", errorMsg);
+    console.error(`❌ ERROR EN /REACTIVAR:`);
+    console.error(`   Teléfono: ${phone}`);
+    console.error(`   Error: ${errorMsg}`);
+    console.error(`   Stack:`, err.stack);
     
-    await bot.sendMessage(chatId,
-      `❌ *Error al enviar plantilla*\n\n` +
-      `📱 Número: ${phone}\n` +
-      `⚠️ Razón: ${errorMsg}\n\n` +
-      `*Posibles causas:*\n` +
-      `• Template "reanudar_chat" no existe en Meta\n` +
-      `• Número no válido en WhatsApp\n` +
-      `• Límites de rate de API\n` +
-      `• Error de red (SSL/EPROTO)`,
-      { ...opts, parse_mode: 'Markdown' }
-    );
+    // Intentar enviar mensaje de error
+    console.log(`📤 Enviando mensaje de error a Telegram...`);
+    try {
+      await bot.sendMessage(chatId,
+        `❌ *Error al enviar plantilla*\n\n` +
+        `📱 Número: ${phone}\n` +
+        `⚠️ Razón: ${errorMsg}\n\n` +
+        `*Posibles causas:*\n` +
+        `• Template "reanudar_chat" no existe en Meta\n` +
+        `• Número no válido en WhatsApp\n` +
+        `• Límites de rate de API\n` +
+        `• Error de red (SSL/EPROTO)\n\n` +
+        `*Detalles técnicos:*\n` +
+        `\`${errorMsg.substring(0, 100)}\``,
+        { ...opts, parse_mode: 'Markdown' }
+      );
+      console.log(`✅ Mensaje de error enviado`);
+    } catch (sendErr) {
+      console.error(`❌ ERROR CRÍTICO: No se pudo enviar mensaje de error a Telegram:`);
+      console.error(`   Error: ${sendErr.message}`);
+      console.error(`   Stack:`, sendErr.stack);
+    }
   }
 }
 
