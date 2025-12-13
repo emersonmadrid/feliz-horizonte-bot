@@ -1883,7 +1883,7 @@ async function processTelegramWebhookSafe(update) {
                 .maybeSingle(),
               
               new Promise((_, reject) => 
-                setTimeout(() => reject(new Error("Timeout 3s")), 3000)
+                setTimeout(() => reject(new Error("Timeout 3s")), 10000)
               )
             ]);
 
