@@ -194,6 +194,63 @@ async function sendWhatsAppText(to, text) {
   console.log(`✅ WhatsApp enviado exitosamente a ${to}`);
 }
 
+function sanitizeToken(token) {
+  if (!token) return "(no token)";
+  if (token.length <= 10) return `${token.slice(0, 3)}...${token.slice(-1)}`;
+  return `${token.slice(0, 6)}...${token.slice(-4)}`;
+}
+
+async function sendWhatsAppWithRetry(url, body, maxRetries = 3) {
+  const sanitizedToken = sanitizeToken(WHATSAPP_API_TOKEN);
+  const headers = { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` };
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const backoffMs = Math.pow(2, attempt - 1) * 1000;
+
+    console.log(`📤 [Intento ${attempt}/${maxRetries}] Enviando WhatsApp`, {
+      url,
+      headers: { ...headers, Authorization: `Bearer ${sanitizedToken}` },
+      body,
+      timeoutMs: 15000,
+    });
+
+    try {
+      const response = await axios.post(url, body, { headers, timeout: 15000 });
+      console.log(`✅ [Intento ${attempt}] Respuesta WhatsApp:`, response?.data);
+      return response?.data;
+    } catch (err) {
+      const status = err?.response?.status;
+      const code = err?.code;
+      const isNetworkError = ["EPROTO", "ETIMEDOUT", "ECONNRESET"].includes(code);
+      const is5xx = status >= 500 && status < 600;
+      const is4xx = status >= 400 && status < 500;
+      const metaError = err?.response?.data || err?.message || err;
+
+      console.error(`❌ Error intento ${attempt}/${maxRetries}:`, metaError);
+
+      if (is4xx && !is5xx && !isNetworkError) {
+        console.log("⛔ Error 4xx detectado, no se reintentará.");
+        throw err;
+      }
+
+      if (!(isNetworkError || is5xx)) {
+        console.log("⛔ Error no elegible para retry, abortando.");
+        throw err;
+      }
+
+      if (attempt >= maxRetries) {
+        console.log("⛔ Máximo de reintentos alcanzado, abortando.");
+        throw err;
+      }
+
+      console.log(
+        `⏳ Reintentando en ${backoffMs / 1000}s (motivo: ${code || status || "desconocido"})`
+      );
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+}
+
 async function sendWhatsAppTemplate(to, templateName) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
     console.log(`📱 [SIMULADO] Template WhatsApp → ${to}: ${templateName}`);
@@ -222,9 +279,7 @@ async function sendWhatsAppTemplate(to, templateName) {
   });
 
   try {
-    const response = await axios.post(url, body, { headers });
-    console.log("✅ Respuesta de WhatsApp:", response?.data);
-    return response?.data;
+    return await sendWhatsAppWithRetry(url, body);
   } catch (err) {
     const metaError = err?.response?.data || err?.message || err;
     console.error("❌ Error al enviar template WhatsApp:", metaError);
@@ -866,14 +921,26 @@ bot.onText(/^\/reactivar\s+(\S+)$/i, async (msg, match) => {
   const sendOptions = msg.message_thread_id ? { message_thread_id: msg.message_thread_id } : {};
 
   try {
-    await sendWhatsAppTemplate(to, "reanudar_chat");
-    await bot.sendMessage(msg.chat.id, `✅ Plantilla enviada a ${to}`, sendOptions);
+    const normalizedNumber = to.replace(/\D/g, "");
+
+    if (!/^\d{8,15}$/.test(normalizedNumber)) {
+      return await bot.sendMessage(
+        msg.chat.id,
+        "⚠️ Número inválido. Envía entre 8 y 15 dígitos, incluyendo código de país sin el signo +.",
+        sendOptions
+      );
+    }
+
+    await bot.sendMessage(msg.chat.id, "⏳ Enviando plantilla...", sendOptions);
+
+    await sendWhatsAppTemplate(normalizedNumber, "reanudar_chat");
+    await bot.sendMessage(msg.chat.id, `✅ Plantilla enviada a ${normalizedNumber}`, sendOptions);
   } catch (e) {
     const errorMsg = e?.message || "Error desconocido al enviar la plantilla";
     console.error("❌ Error en /reactivar:", errorMsg);
     await bot.sendMessage(
       msg.chat.id,
-      `❌ Error al enviar plantilla a ${to}: ${errorMsg}`,
+      `❌ Error al enviar plantilla a ${to}: ${errorMsg}\n\nPosibles causas:\n• Número sin código de país\n• El usuario bloqueó mensajes\n• Token o plantilla inválida`,
       sendOptions
     );
   }
@@ -1222,156 +1289,157 @@ app.get("/admin/list-topics", async (req, res) => {
 });
 
 // Webhook de Telegram
-app.post("/telegram/webhook", async (req, res) => {
-  try {
-    const update = req.body;
-    const callbackQuery = update?.callback_query;
-    const msg = update?.message;
+app.post("/telegram/webhook", (req, res) => {
+  res.sendStatus(200);
 
-    console.log("📥 TELEGRAM WEBHOOK RECIBIDO:");
-    console.log(JSON.stringify(update, null, 2));
+  (async () => {
+    try {
+      const update = req.body;
+      const callbackQuery = update?.callback_query;
+      const msg = update?.message;
 
-    if (callbackQuery) {
-      console.log("📲 Procesando callback_query recibido por webhook");
-      await handleCallbackQuery(callbackQuery);
-      return res.sendStatus(200);
-    }
+      console.log("📥 TELEGRAM WEBHOOK RECIBIDO:");
+      console.log(JSON.stringify(update, null, 2));
 
-    if (!msg) {
-      console.log("⚠️ Telegram webhook sin mensaje");
-      return res.sendStatus(200);
-    }
+      if (callbackQuery) {
+        console.log("📲 Procesando callback_query recibido por webhook");
+        await handleCallbackQuery(callbackQuery);
+        return;
+      }
 
-    const chatId = String(msg.chat?.id);
-    const hasMedia = Boolean(msg.document || msg.video || (msg.photo?.length));
-    const text = (msg.text || msg.caption || "").trim();
-    const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
-    const fromUser = msg.from?.username || msg.from?.first_name || "Unknown";
-    const isBot = msg.from?.is_bot || false;
+      if (!msg) {
+        console.log("⚠️ Telegram webhook sin mensaje");
+        return;
+      }
 
-    console.log(`📨 TELEGRAM MESSAGE DETAILS:`);
-    console.log(`   Chat ID: ${chatId}`);
-    console.log(`   Topic ID: ${topicId}`);
-    console.log(`   From: ${fromUser} (bot: ${isBot})`);
-    console.log(`   Text: "${text}"`);
+      const chatId = String(msg.chat?.id);
+      const hasMedia = Boolean(msg.document || msg.video || (msg.photo?.length));
+      const text = (msg.text || msg.caption || "").trim();
+      const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
+      const fromUser = msg.from?.username || msg.from?.first_name || "Unknown";
+      const isBot = msg.from?.is_bot || false;
 
-    if (isBot) {
-      console.log("⚠️ Mensaje de bot, ignorando");
-      return res.sendStatus(200);
-    }
+      console.log(`📨 TELEGRAM MESSAGE DETAILS:`);
+      console.log(`   Chat ID: ${chatId}`);
+      console.log(`   Topic ID: ${topicId}`);
+      console.log(`   From: ${fromUser} (bot: ${isBot})`);
+      console.log(`   Text: "${text}"`);
 
-    if (!hasMedia && text.startsWith("/")) {
-      console.log(`🤖 Comando detectado: ${text}`);
-      bot.processUpdate(update);
-      return res.sendStatus(200);
-    }
+      if (isBot) {
+        console.log("⚠️ Mensaje de bot, ignorando");
+        return;
+      }
 
-    if (chatId === PANEL_CHAT_ID && topicId && (text || hasMedia)) {
-      if (text && containsOffensiveLanguage(text)) {
-        console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
-        await bot.sendMessage(PANEL_CHAT_ID,
-          `⚠️ <b>MENSAJE BLOQUEADO</b>\n\n` +
-          `El mensaje contenía lenguaje inapropiado y NO fue enviado al cliente.\n\n` +
-          `Por favor, mantén un lenguaje profesional y empático en todo momento.\n\n` +
-          `<i>Usuario: @${fromUser}</i>`,
-          {
-            parse_mode: "HTML",
-            message_thread_id: topicId,
+      if (!hasMedia && text.startsWith("/")) {
+        console.log(`🤖 Comando detectado: ${text}`);
+        bot.processUpdate(update);
+        return;
+      }
+
+      if (chatId === PANEL_CHAT_ID && topicId && (text || hasMedia)) {
+        if (text && containsOffensiveLanguage(text)) {
+          console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
+          await bot.sendMessage(PANEL_CHAT_ID,
+            `⚠️ <b>MENSAJE BLOQUEADO</b>\n\n` +
+            `El mensaje contenía lenguaje inapropiado y NO fue enviado al cliente.\n\n` +
+            `Por favor, mantén un lenguaje profesional y empático en todo momento.\n\n` +
+            `<i>Usuario: @${fromUser}</i>`,
+            {
+              parse_mode: "HTML",
+              message_thread_id: topicId,
+            }
+          );
+
+          if (ADMIN && chatId !== ADMIN) {
+            await bot.sendMessage(ADMIN,
+              `⚠️ <b>ALERTA: Mensaje ofensivo bloqueado</b>\n\n` +
+              `Usuario: @${fromUser}\n` +
+              `Topic: ${topicId}\n` +
+              `Mensaje: "${text}"\n\n` +
+              `El mensaje NO fue enviado al cliente.`,
+              { parse_mode: "HTML" }
+            );
           }
-        );
+          return;
+        }
 
-        if (ADMIN && chatId !== ADMIN) {
-          await bot.sendMessage(ADMIN,
-            `⚠️ <b>ALERTA: Mensaje ofensivo bloqueado</b>\n\n` +
-            `Usuario: @${fromUser}\n` +
-            `Topic: ${topicId}\n` +
-            `Mensaje: "${text}"\n\n` +
-            `El mensaje NO fue enviado al cliente.`,
-            { parse_mode: "HTML" }
+        console.log(`✅ Mensaje del panel en topic ${topicId}, procesando...`);
+
+        let phone = topicToPhone.get(topicId);
+
+        if (!phone) {
+          console.log(`🔍 Buscando teléfono para topic ${topicId} en Supabase...`);
+          const { data: row } = await supabase
+            .from("fh_topics")
+            .select("phone")
+            .eq("topic_id", topicId)
+            .maybeSingle();
+
+          if (row?.phone) {
+            phone = row.phone;
+            topicToPhone.set(topicId, phone);
+            phoneToTopic.set(phone, topicId);
+            console.log(`✅ Teléfono encontrado en BD: ${phone}`);
+          }
+        } else {
+          console.log(`✅ Teléfono encontrado en caché: ${phone}`);
+        }
+
+        if (phone) {
+          console.log(`📤 REENVIANDO A WHATSAPP:`);
+          console.log(`   Desde topic: ${topicId}`);
+          console.log(`   Hacia número: ${phone}`);
+          console.log(`   Mensaje: "${text}"`);
+
+          const mediaForwarded = hasMedia
+            ? await forwardTelegramMediaToWhatsApp({ msg, phone })
+            : null;
+
+          await mergeConversationState(phone, {
+            lastMessageTime: Date.now(),
+            isHumanHandling: true,
+            awaitingScheduling: false
+          });
+
+          if (mediaForwarded) {
+            await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+          } else {
+            await sendWhatsAppText(phone, text);
+            await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
+          }
+
+          console.log(`✅ Mensaje reenviado exitosamente`);
+
+          // Programar timeout automático
+          scheduleTimeoutWarning(phone);
+
+          await bot.sendMessage(PANEL_CHAT_ID,
+            `📤 Enviado a <code>${escapeHTML(phone)}</code>\n\n` +
+            `💡 <i>Cuando termines, devuelve el control:</i>`,
+            {
+              parse_mode: "HTML",
+              message_thread_id: topicId,
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: "🤖 Devolver a IA", callback_data: `release_${phone}` }
+                ]]
+              }
+            }
+          );
+        } else {
+          console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
+
+          await bot.sendMessage(PANEL_CHAT_ID,
+            `⚠️ Error: No se encontró el número de teléfono asociado a este topic.\nTopic ID: ${topicId}`,
+            { message_thread_id: topicId }
           );
         }
-        return res.sendStatus(200);
       }
-
-      console.log(`✅ Mensaje del panel en topic ${topicId}, procesando...`);
-
-      let phone = topicToPhone.get(topicId);
-
-      if (!phone) {
-        console.log(`🔍 Buscando teléfono para topic ${topicId} en Supabase...`);
-        const { data: row } = await supabase
-          .from("fh_topics")
-          .select("phone")
-          .eq("topic_id", topicId)
-          .maybeSingle();
-
-        if (row?.phone) {
-          phone = row.phone;
-          topicToPhone.set(topicId, phone);
-          phoneToTopic.set(phone, topicId);
-          console.log(`✅ Teléfono encontrado en BD: ${phone}`);
-        }
-      } else {
-        console.log(`✅ Teléfono encontrado en caché: ${phone}`);
-      }
-
-      if (phone) {
-        console.log(`📤 REENVIANDO A WHATSAPP:`);
-        console.log(`   Desde topic: ${topicId}`);
-        console.log(`   Hacia número: ${phone}`);
-        console.log(`   Mensaje: "${text}"`);
-
-        const mediaForwarded = hasMedia
-          ? await forwardTelegramMediaToWhatsApp({ msg, phone })
-          : null;
-
-        await mergeConversationState(phone, {
-          lastMessageTime: Date.now(),
-          isHumanHandling: true,
-          awaitingScheduling: false
-        });
-
-        if (mediaForwarded) {
-          await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
-        } else {
-          await sendWhatsAppText(phone, text);
-          await supabase.from("mensajes").insert([{ chat_id: phone, mensaje: "[human]" }]);
-        }
-
-        console.log(`✅ Mensaje reenviado exitosamente`);
-
-        // Programar timeout automático
-        scheduleTimeoutWarning(phone);
-
-        await bot.sendMessage(PANEL_CHAT_ID,
-          `📤 Enviado a <code>${escapeHTML(phone)}</code>\n\n` +
-          `💡 <i>Cuando termines, devuelve el control:</i>`,
-          {
-            parse_mode: "HTML",
-            message_thread_id: topicId,
-            reply_markup: {
-              inline_keyboard: [[
-                { text: "🤖 Devolver a IA", callback_data: `release_${phone}` }
-              ]]
-            }
-          }
-        );
-      } else {
-        console.error(`❌ NO SE ENCONTRÓ TELÉFONO para topic ${topicId}`);
-
-        await bot.sendMessage(PANEL_CHAT_ID,
-          `⚠️ Error: No se encontró el número de teléfono asociado a este topic.\nTopic ID: ${topicId}`,
-          { message_thread_id: topicId }
-        );
-      }
+    } catch (e) {
+      console.error("❌ TG WEBHOOK ERROR:");
+      console.error(e);
     }
-
-    return res.sendStatus(200);
-  } catch (e) {
-    console.error("❌ TG WEBHOOK ERROR:");
-    console.error(e);
-    return res.sendStatus(200);
-  }
+  })();
 });
 
 // Webhook de WhatsApp (GET - verificación)
