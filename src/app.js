@@ -195,16 +195,16 @@ async function sendWhatsAppText(to, text) {
 }
 
 async function sendWhatsAppWithRetry(url, body, maxRetries = 3) {
-  const headers = {
+  const headers = { 
     Authorization: `Bearer ${WHATSAPP_API_TOKEN}`,
     "Content-Type": "application/json"
   };
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`📤 Intento ${attempt}/${maxRetries} enviando a WhatsApp API...`);
-
-      const response = await axios.post(url, body, {
+      console.log(`📤 Intento ${attempt}/${maxRetries} - WhatsApp API`);
+      
+      const response = await axios.post(url, body, { 
         headers,
         timeout: 15000,
         validateStatus: (status) => status < 500
@@ -214,20 +214,20 @@ async function sendWhatsAppWithRetry(url, body, maxRetries = 3) {
         throw new Error(response.data?.error?.message || `HTTP ${response.status}`);
       }
 
-      console.log(`✅ WhatsApp API respondió OK (intento ${attempt})`);
+      console.log(`✅ Template enviado OK (intento ${attempt})`);
       return response.data;
 
     } catch (err) {
-      const isLastAttempt = attempt === maxRetries;
+      const isLast = attempt === maxRetries;
       const isNetworkError = ["EPROTO", "ETIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(err.code);
 
       console.error(`❌ Intento ${attempt} falló:`, err.message);
 
-      if (isLastAttempt || !isNetworkError) throw err;
+      if (isLast || !isNetworkError) throw err;
 
-      const backoffMs = 1000 * Math.pow(2, attempt - 1);
-      console.log(`⏳ Esperando ${backoffMs}ms antes de reintentar...`);
-      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      const backoff = 1000 * Math.pow(2, attempt - 1);
+      console.log(`⏳ Retry en ${backoff}ms...`);
+      await new Promise(resolve => setTimeout(resolve, backoff));
     }
   }
 }
@@ -240,7 +240,6 @@ function sanitizeToken(token) {
 
 async function sendWhatsAppTemplate(to, templateName) {
   if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`📱 [SIMULADO] Template WhatsApp → ${to}: ${templateName}`);
     throw new Error("Faltan credenciales de WhatsApp");
   }
 
@@ -255,16 +254,14 @@ async function sendWhatsAppTemplate(to, templateName) {
     },
   };
 
-  console.log("📤 Enviando template WhatsApp:", { to, templateName });
+  console.log(`📤 Enviando template "${templateName}" a ${to}`);
 
   try {
-    const result = await sendWhatsAppWithRetry(url, body);
-    console.log("✅ Template enviado exitosamente");
-    return result;
+    return await sendWhatsAppWithRetry(url, body);
   } catch (err) {
-    const errorMsg = err?.response?.data?.error?.message || err.message;
-    console.error("❌ Error final enviando template:", errorMsg);
-    throw new Error(errorMsg);
+    const msg = err?.response?.data?.error?.message || err.message;
+    console.error("❌ Error final:", msg);
+    throw new Error(msg);
   }
 }
 
@@ -890,58 +887,71 @@ bot.onText(/^\/enviar\s+(.+?)\s*\|\s*([\s\S]+)$/i, async (msg, match) => {
 bot.onText(/^\/reactivar\s+(\S+)$/i, async (msg, match) => {
   console.log(`📨 Comando /reactivar recibido de ${msg.chat.id}`);
 
+  const phone = match[1].trim();
+  await handleReactivarCommand(msg, phone);
+});
+
+async function handleReactivarCommand(msg, phone) {
   const chatId = String(msg.chat.id);
   const topicId = msg.message_thread_id;
-  
-  if (chatId !== ADMIN && chatId !== PANEL_CHAT_ID) {
-    return bot.sendMessage(msg.chat.id, "❌ No autorizado.");
-  }
-
-  const to = match[1].trim();
-  
-  // Validar formato
-  if (!/^\d{8,15}$/.test(to)) {
-    const opts = topicId ? { message_thread_id: topicId } : {};
-    return bot.sendMessage(msg.chat.id, 
-      `❌ Número inválido: "${to}"\nDebe contener solo dígitos (8-15 caracteres)`,
-      opts
-    );
-  }
-
   const opts = topicId ? { message_thread_id: topicId } : {};
 
+  console.log(`📨 Procesando /reactivar para ${phone}`);
+
+  // Validar permisos
+  if (chatId !== ADMIN && chatId !== PANEL_CHAT_ID) {
+    return bot.sendMessage(chatId, "❌ No autorizado.", opts);
+  }
+
+  // Validar formato de número
+  if (!/^\d{8,15}$/.test(phone)) {
+    return bot.sendMessage(chatId, 
+      `❌ Número inválido: "${phone}"\n` +
+      `Debe tener solo dígitos (8-15 caracteres)\n` +
+      `Ejemplo: /reactivar 51999999999`,
+      opts
+    );
+  }
+
   try {
-    // Paso 1: Informar inicio
-    await bot.sendMessage(msg.chat.id, 
-      `⏳ Enviando plantilla "reanudar_chat" a ${to}...`,
+    // 1. Informar inicio
+    await bot.sendMessage(chatId, 
+      `⏳ Enviando plantilla "reanudar_chat" a ${phone}...\n\n` +
+      `Esto puede tardar unos segundos.`,
       opts
     );
 
-    // Paso 2: Enviar con retry
-    const result = await sendWhatsAppTemplate(to, "reanudar_chat");
+    // 2. Enviar template con retry
+    const result = await sendWhatsAppTemplate(phone, "reanudar_chat");
     
-    // Paso 3: Confirmar éxito
-    await bot.sendMessage(msg.chat.id, 
-      `✅ Plantilla enviada exitosamente a ${to}\n` +
+    // 3. Confirmar éxito
+    await bot.sendMessage(chatId, 
+      `✅ *Plantilla enviada exitosamente*\n\n` +
+      `📱 Número: ${phone}\n` +
+      `📋 Template: reanudar_chat\n` +
       `🆔 Message ID: ${result?.messages?.[0]?.id || 'N/A'}`,
-      opts
+      { ...opts, parse_mode: 'Markdown' }
     );
+
+    console.log(`✅ /reactivar completado para ${phone}`);
 
   } catch (err) {
     const errorMsg = err?.message || "Error desconocido";
     console.error("❌ Error en /reactivar:", errorMsg);
     
-    await bot.sendMessage(msg.chat.id,
-      `❌ Error al enviar plantilla a ${to}:\n${errorMsg}\n\n` +
-      `Posibles causas:\n` +
+    await bot.sendMessage(chatId,
+      `❌ *Error al enviar plantilla*\n\n` +
+      `📱 Número: ${phone}\n` +
+      `⚠️ Razón: ${errorMsg}\n\n` +
+      `*Posibles causas:*\n` +
       `• Template "reanudar_chat" no existe en Meta\n` +
       `• Número no válido en WhatsApp\n` +
-      `• Límites de rate de WhatsApp API\n` +
+      `• Límites de rate de API\n` +
       `• Error de red (SSL/EPROTO)`,
-      opts
+      { ...opts, parse_mode: 'Markdown' }
     );
   }
-});
+}
 
 async function handleCallbackQuery(query) {
   try {
@@ -1287,44 +1297,124 @@ app.get("/admin/list-topics", async (req, res) => {
 
 // Webhook de Telegram
 app.post("/telegram/webhook", async (req, res) => {
-  // CRÍTICO: Responder primero
+  // CRÍTICO: Responder inmediatamente
   res.sendStatus(200);
 
   try {
     const update = req.body;
+    console.log("📥 TELEGRAM WEBHOOK RECIBIDO:", JSON.stringify(update, null, 2));
 
     // Procesar callbacks
     if (update?.callback_query) {
+      console.log("📲 Procesando callback_query");
       await handleCallbackQuery(update.callback_query);
       return;
     }
 
     const msg = update?.message;
-    if (!msg || msg.from?.is_bot) return;
+    if (!msg) {
+      console.log("⚠️ Telegram webhook sin mensaje");
+      return;
+    }
 
     const chatId = String(msg.chat?.id);
-    const hasMedia = Boolean(msg.document || msg.video || (msg.photo?.length));
     const text = (msg.text || msg.caption || "").trim();
     const topicId = msg.message_thread_id ? String(msg.message_thread_id) : null;
+    const isBot = msg.from?.is_bot || false;
+    const hasMedia = Boolean(msg.document || msg.video || (msg.photo?.length));
     const fromUser = msg.from?.username || msg.from?.first_name || "Unknown";
-
-    console.log("📥 TELEGRAM WEBHOOK RECIBIDO:");
-    console.log(JSON.stringify(update, null, 2));
 
     console.log(`📨 TELEGRAM MESSAGE DETAILS:`);
     console.log(`   Chat ID: ${chatId}`);
     console.log(`   Topic ID: ${topicId}`);
-    console.log(`   From: ${fromUser} (bot: ${msg.from?.is_bot || false})`);
     console.log(`   Text: "${text}"`);
 
-    // Procesar comandos
-    if (text.startsWith("/")) {
-      console.log(`🤖 Comando detectado: ${text}`);
-      bot.processUpdate(update);
-      return; // IMPORTANTE: Return aquí
+    if (isBot) {
+      console.log("⚠️ Mensaje de bot, ignorando");
+      return;
     }
 
-    if (chatId === PANEL_CHAT_ID && topicId && (text || hasMedia)) {
+    // ===== PROCESAR COMANDOS MANUALMENTE =====
+    if (text.startsWith("/")) {
+      console.log(`🤖 Comando detectado: ${text}`);
+
+      // Comando /reactivar
+      const reactivarMatch = text.match(/^\/reactivar\s+(\S+)$/i);
+      if (reactivarMatch) {
+        const phone = reactivarMatch[1].trim();
+        await handleReactivarCommand(msg, phone);
+        return;
+      }
+
+      // Comando /auto
+      if (text === '/auto' && chatId === PANEL_CHAT_ID && topicId) {
+        const phone = topicToPhone.get(topicId);
+        if (!phone) {
+          return bot.sendMessage(chatId,
+            "⚠️ No se encontró el teléfono asociado a este topic.",
+            { message_thread_id: topicId }
+          );
+        }
+
+        await mergeConversationState(phone, {
+          isHumanHandling: false,
+          awaitingScheduling: false,
+          lastMessageTime: Date.now()
+        });
+
+        if (timeoutWarnings.has(phone)) {
+          clearTimeout(timeoutWarnings.get(phone));
+          timeoutWarnings.delete(phone);
+        }
+
+        await bot.sendMessage(chatId,
+          `✅ Control devuelto a la IA para <code>${escapeHTML(phone)}</code>`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: topicId
+          }
+        );
+        return;
+      }
+
+      // Comando /estado
+      if (text === '/estado' && chatId === PANEL_CHAT_ID && topicId) {
+        const phone = topicToPhone.get(topicId);
+        if (!phone) {
+          return bot.sendMessage(chatId,
+            "⚠️ No se encontró el teléfono asociado a este topic.",
+            { message_thread_id: topicId }
+          );
+        }
+
+        const context = await getConversationState(phone);
+        const timeSince = context?.lastMessageTime
+          ? Math.floor((Date.now() - context.lastMessageTime) / 60000)
+          : 'N/A';
+
+        await bot.sendMessage(chatId,
+          `📊 <b>Estado de conversación</b>\n\n` +
+          `📱 Teléfono: <code>${escapeHTML(phone)}</code>\n` +
+          `🤖 Control: ${context?.isHumanHandling ? '👤 HUMANO' : '🤖 IA'}\n` +
+          `⏰ Último mensaje: hace ${timeSince} min\n` +
+          `🎯 Última intención: ${context?.lastIntent || 'N/A'}`,
+          {
+            parse_mode: "HTML",
+            message_thread_id: topicId
+          }
+        );
+        return;
+      }
+
+      // Otros comandos: pasar a bot.processUpdate() (solo para admin)
+      if (chatId === ADMIN) {
+        bot.processUpdate(update);
+      }
+      return;
+    }
+
+    // ===== PROCESAR MENSAJES NORMALES (no comandos) =====
+    if (chatId === PANEL_CHAT_ID && topicId && (text || msg.document || msg.video || msg.photo)) {
       if (text && containsOffensiveLanguage(text)) {
         console.log(`🚫 MENSAJE OFENSIVO BLOQUEADO (webhook) de ${fromUser}`);
         await bot.sendMessage(PANEL_CHAT_ID,
@@ -1423,6 +1513,7 @@ app.post("/telegram/webhook", async (req, res) => {
         );
       }
     }
+
   } catch (e) {
     console.error("❌ TG WEBHOOK ERROR:", e);
   }
