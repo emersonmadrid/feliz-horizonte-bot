@@ -1,8 +1,8 @@
 import {
   cancelAppointment,
-  cancelMissingCalendlyAppointments,
   upsertAppointments,
 } from "../persistence/appointments.js";
+import { reconcileCalendlyApiSnapshot } from "../domain/reminders/reconciliation.js";
 import { logReminderDiagnostic } from "../persistence/message-log.js";
 import { fetchPatientsSheet } from "../integrations/google/sheets.js";
 import {
@@ -283,13 +283,10 @@ export async function syncCalendlyApiAppointments(config) {
   }
 
   await upsertAppointments(config, appointments);
-  const cancelledStaleCount = await cancelMissingCalendlyAppointments(
-    config,
-    appointments.map((appointment) => appointment.id)
-  );
+  const reconciliation = await reconcileCalendlyApiSnapshot(config, appointments);
 
-  if (cancelledStaleCount > 0) {
-    console.log(`📅 Calendly API sync: ${cancelledStaleCount} cita(s) futuras ausentes marcadas como canceladas`);
+  if (reconciliation.cancelledMissingCount > 0) {
+    console.log(`📅 Calendly API sync: ${reconciliation.cancelledMissingCount} cita(s) futuras ausentes marcadas como canceladas`);
   }
 
   for (const appointment of appointments) {
