@@ -48,6 +48,18 @@ curl -H "x-cron-secret: $CRON_SECRET" \
   https://feliz-horizonte-bot.vercel.app/api/cron/reminders
 ```
 
+`CRON_SECRET` no crea ni configura un cron en Vercel. Es una llave privada para autorizar el endpoint `/api/cron/reminders`.
+
+En esta arquitectura:
+
+- el cron real vive en el VPS como `feliz-horizonte-reminders.timer`,
+- el VPS llama el endpoint de Vercel cada 5 minutos,
+- Vercel valida `CRON_SECRET`,
+- si el secreto coincide, ejecuta el motor de recordatorios,
+- si falta o no coincide, responde `401 Unauthorized`.
+
+Esto evita que cualquier persona con la URL pueda disparar recordatorios manualmente.
+
 ## Fuentes de citas
 
 El sistema soporta cuatro modos:
