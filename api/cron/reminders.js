@@ -1,6 +1,11 @@
 import { loadConfig, validateCronSecret } from "../../src/services/reminders/core/config.js";
 import { runReminderEngine } from "../../src/services/reminders/domain/reminders/engine.js";
 
+function isDryRunRequest(req) {
+  const value = req.query?.dry_run || req.query?.dryRun;
+  return ["true", "1", "yes", "on"].includes(String(value || "").toLowerCase());
+}
+
 export default async function handler(req, res) {
   console.log("⏰ Iniciando ejecución de recordatorios vía Cron...");
   
@@ -12,6 +17,9 @@ export default async function handler(req, res) {
   try {
     console.log("⚙️ Cargando configuración...");
     const config = loadConfig();
+    if (isDryRunRequest(req)) {
+      config.remindersDryRun = true;
+    }
 
     // CAPA DE SIMULACIÓN PARA PRUEBAS (Costo 0)
     let mockedAppointments = null;

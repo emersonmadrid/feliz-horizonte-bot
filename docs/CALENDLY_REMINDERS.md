@@ -113,6 +113,7 @@ DAY_REMINDER_HOUR=8
 HOUR_REMINDER_LEAD_MINUTES=60
 HOUR_REMINDER_WINDOW_MINUTES=5
 REMINDERS_ENABLED=true
+REMINDERS_DRY_RUN=false
 MAX_MESSAGES_PER_RUN=5
 MAX_MESSAGES_PER_DAY=20
 MONTHLY_MESSAGE_LIMIT=200
@@ -225,9 +226,47 @@ El motor no envia si:
 - la cita no tiene paciente elegible,
 - ya se envio ese tipo de recordatorio,
 - `REMINDERS_ENABLED=false`,
+- `REMINDERS_DRY_RUN=true`,
 - se alcanzo `MAX_MESSAGES_PER_RUN`,
 - se alcanzo `MAX_MESSAGES_PER_DAY`,
 - se alcanzo `MONTHLY_MESSAGE_LIMIT`.
+
+## Dry-run
+
+`REMINDERS_DRY_RUN=true` ejecuta el flujo real sin mandar WhatsApp:
+
+1. sincroniza Calendly o Google segun `APPOINTMENT_SOURCE`,
+2. actualiza/cancela citas locales segun corresponda,
+3. calcula recordatorios elegibles,
+4. registra `skipped` con `skip_reason=dry_run`,
+5. no llama a Meta WhatsApp,
+6. no marca `day_sent_at` ni `hour_sent_at`.
+
+Para una prueba puntual sin cambiar variables en Vercel:
+
+```bash
+curl -H "x-cron-secret: $CRON_SECRET" \
+  "https://feliz-horizonte-bot.vercel.app/api/cron/reminders?dry_run=true"
+```
+
+Respuesta esperada si hay recordatorios elegibles:
+
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "checked": { "day": 1, "hour": 0 },
+  "sent": [],
+  "failed": [],
+  "skipped": [
+    {
+      "id": "calendly:event:invitee",
+      "type": "day",
+      "reason": "dry_run"
+    }
+  ]
+}
+```
 
 ## VPS
 

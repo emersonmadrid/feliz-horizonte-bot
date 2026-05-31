@@ -23,6 +23,35 @@ function createSkippedEntry(id, type, reason) {
   return { id, type, reason };
 }
 
+export function createDryRunEntry(appointment, type) {
+  return {
+    id: appointment.id,
+    type,
+    reason: "dry_run",
+    patientName: appointment.patientName,
+    patientEmail: appointment.patientEmail,
+    patientPhone: appointment.patientPhone,
+    startsAt: appointment.startsAt,
+  };
+}
+
+export function buildDryRunSummary(sameDayAppointments, oneHourAppointments) {
+  return {
+    ok: true,
+    dryRun: true,
+    checked: {
+      day: sameDayAppointments.length,
+      hour: oneHourAppointments.length,
+    },
+    sent: [],
+    failed: [],
+    skipped: [
+      ...sameDayAppointments.map((appointment) => createDryRunEntry(appointment, "day")),
+      ...oneHourAppointments.map((appointment) => createDryRunEntry(appointment, "hour")),
+    ],
+  };
+}
+
 async function logSkippedReminder(config, appointment, reminderType, skipReason) {
   await logReminderEvent(config, {
     appointmentId: appointment.id,
@@ -113,6 +142,18 @@ export async function runReminderEngine(config, mockedAppointments = null) {
   if (!config.remindersEnabled) {
     await logDisabledAppointments(config, sameDayAppointments, oneHourAppointments);
     return buildDisabledSummary(config, sameDayAppointments, oneHourAppointments);
+  }
+
+  if (config.remindersDryRun) {
+    for (const appointment of sameDayAppointments) {
+      await logSkippedReminder(config, appointment, "day", "dry_run");
+    }
+
+    for (const appointment of oneHourAppointments) {
+      await logSkippedReminder(config, appointment, "hour", "dry_run");
+    }
+
+    return buildDryRunSummary(sameDayAppointments, oneHourAppointments);
   }
 
   let dailyUsage = await getDailyUsage(config);

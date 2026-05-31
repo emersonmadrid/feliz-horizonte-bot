@@ -96,6 +96,7 @@ export async function buildAdminSummary(config) {
     ok: true,
     generatedAt: new Date().toISOString(),
     remindersEnabled: config.remindersEnabled,
+    dryRun: config.remindersDryRun,
     limits: {
       daily: dailyLimit,
       monthly: monthlyLimit,
@@ -107,6 +108,10 @@ export async function buildAdminSummary(config) {
     today: {
       messageLog: todayStats,
       eligibleNow: {
+        counts: {
+          day: dayEligible.length,
+          hour: hourEligible.length,
+        },
         day: dayEligible.map(summarizeAppointment),
         hour: hourEligible.map(summarizeAppointment),
       },

@@ -108,6 +108,7 @@ export function loadConfig() {
     { min: 0, max: 1000000 }
   );
   const remindersEnabled = booleanEnv("REMINDERS_ENABLED", true);
+  const remindersDryRun = booleanEnv("REMINDERS_DRY_RUN", false);
   const maxMessagesPerRun = numberInRange("MAX_MESSAGES_PER_RUN", 0, { min: 0, max: 1000000 });
   const maxMessagesPerDay = numberInRange("MAX_MESSAGES_PER_DAY", 0, { min: 0, max: 1000000 });
 
@@ -119,6 +120,7 @@ export function loadConfig() {
     hourReminderLeadMinutes: numberInRange("HOUR_REMINDER_LEAD_MINUTES", 60, { min: 1, max: 1440 }),
     hourReminderWindowMinutes: numberInRange("HOUR_REMINDER_WINDOW_MINUTES", 5, { min: 1, max: 180 }),
     remindersEnabled,
+    remindersDryRun,
     maxMessagesPerRun,
     maxMessagesPerDay,
     monthlyMessageLimit,
@@ -173,6 +175,7 @@ export function getPublicConfig() {
     hourReminderLeadMinutes: numberInRange("HOUR_REMINDER_LEAD_MINUTES", 60, { min: 1, max: 1440 }),
     hourReminderWindowMinutes: numberInRange("HOUR_REMINDER_WINDOW_MINUTES", 5, { min: 1, max: 180 }),
     remindersEnabled: booleanEnv("REMINDERS_ENABLED", true),
+    remindersDryRun: booleanEnv("REMINDERS_DRY_RUN", false),
     maxMessagesPerRun: numberInRange("MAX_MESSAGES_PER_RUN", 0, { min: 0, max: 1000000 }),
     maxMessagesPerDay: numberInRange("MAX_MESSAGES_PER_DAY", 0, { min: 0, max: 1000000 }),
     monthlyMessageLimit: numberInRange("MONTHLY_MESSAGE_LIMIT", 0, { min: 0, max: 1000000 }),
