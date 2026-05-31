@@ -187,6 +187,31 @@ export async function cancelAppointment(config, appointmentId, rawEvent = null) 
   return rowCount;
 }
 
+export async function cancelMissingCalendlyAppointments(config, activeAppointmentIds = []) {
+  await ensureAppointmentsTable(config);
+  const pool = getPostgresPool(config);
+
+  const { rowCount } = await pool.query(
+    `
+      update whatsapp_appointments
+      set
+        calendar_status = 'cancelled',
+        eligibility_status = 'cancelled',
+        skip_reason = 'calendly_api_missing_from_active_events',
+        error_message = 'Calendly API sync did not return this future appointment; it may have been cancelled or rescheduled.',
+        synced_at = now(),
+        updated_at = now()
+      where source = 'calendly'
+        and starts_at >= now()
+        and coalesce(calendar_status, 'scheduled') <> 'cancelled'
+        and not (appointment_id = any($1::text[]))
+    `,
+    [activeAppointmentIds]
+  );
+
+  return rowCount;
+}
+
 export async function fetchEligibleReminderAppointments(config) {
   await ensureAppointmentsTable(config);
   await ensureReminderStateTable(config);
