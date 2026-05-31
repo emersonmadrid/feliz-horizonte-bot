@@ -36,6 +36,12 @@ Bot de atención al cliente inteligente para servicios de salud mental, integrad
 - Modo desarrollo con polling (ngrok)
 - Tests automatizados con Vitest
 
+### 🗓️ **Recordatorios de citas**
+- Fuente configurable: Google Calendar, Calendly o modo híbrido
+- Webhook de Calendly para `invitee.created` e `invitee.canceled`
+- Registro operativo en Postgres/Supabase para auditoría de envíos
+- Límites de seguridad por ejecución, día y mes
+
 ## 📋 Requisitos Previos
 
 - Node.js 18+
@@ -102,6 +108,12 @@ ADMIN_SETUP_KEY=clave_secreta_para_endpoints_admin
 # Calendly (opcional)
 CALENDLY_THERAPY_URL=https://calendly.com/tu-link-terapia
 CALENDLY_PSYCHIATRY_URL=https://calendly.com/tu-link-psiquiatria
+
+# Recordatorios (opcional)
+APPOINTMENT_SOURCE=google # google | calendly_api | calendly | hybrid
+CALENDLY_API_TOKEN=token_api_para_polling
+CALENDLY_WEBHOOK_SECRET=token_largo_para_webhook
+CALENDLY_TIMEZONE=America/Lima
 ```
 
 ### 3. Configurar Supabase

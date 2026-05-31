@@ -6,7 +6,7 @@ describe("Detección de servicios no disponibles", () => {
     const result = await generateAIReply({
       text: "¿hacen terapia para niños autistas?",
       conversationContext: null,
-      phone: "51999999999"
+      phone: null
     });
 
     expect(result.meta.intent).toBe("servicio_no_disponible");
@@ -19,7 +19,7 @@ describe("Detección de servicios no disponibles", () => {
     const result = await generateAIReply({
       text: "necesito evaluación neuropsicológica",
       conversationContext: null,
-      phone: "51999999999"
+      phone: null
     });
 
     expect(result.meta.intent).toBe("servicio_no_disponible");

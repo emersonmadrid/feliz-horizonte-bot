@@ -32,7 +32,63 @@ const audioReplyModel = genAI.getGenerativeModel({
   },
 });
 
+const unavailableServiceKeywords = [
+  /\b(neuropsicolog[íi]a|evaluaci[óo]n neuropsicol[óo]gica|evaluaci[óo]n neurol[óo]gica)\b/i,
+  /\b(autismo|autista|autistas|tea|asperger)\b/i,
+  /\b(terapia ocupacional|ocupacional)\b/i,
+  /\b(psicopedag[óo]gico|psicopedagog[íi]a|dislexia|tdah)\b/i,
+  /\b(terapia aba|aba therapy|intervenci[óo]n temprana)\b/i,
+  /\b(terapia infantil|ni[ñn]os peque[ñn]os|beb[eée]s)\b/i,
+];
+
+export function detectUnavailableService(text = "") {
+  return unavailableServiceKeywords.some((regex) => regex.test(String(text || "")));
+}
+
+async function buildUnavailableServiceReply({ text, phone }) {
+  console.log(`⚠️ Servicio no disponible detectado: ${phone || "desconocido"}`);
+
+  const unavailableMessage =
+    "Actualmente no contamos con ese servicio especializado. " +
+    "Sin embargo, déjame conectarte con el equipo para que puedan " +
+    "orientarte sobre profesionales especializados que puedan ayudarte. 💙";
+
+  if (phone) {
+    await saveMessage({
+      phone,
+      role: 'user',
+      content: text,
+      intent: 'servicio_no_disponible',
+      service: null
+    });
+
+    await saveMessage({
+      phone,
+      role: 'assistant',
+      content: unavailableMessage,
+      intent: 'servicio_no_disponible',
+      service: null
+    });
+  }
+
+  return {
+    message: unavailableMessage,
+    meta: {
+      intent: "servicio_no_disponible",
+      priority: "high",
+      notify_human: true,
+      service: null,
+      suggested_actions: ["transfer_to_specialist"],
+      confidence: 0.95
+    }
+  };
+}
+
 export async function generateAIReply({ text, conversationContext = null, phone = null }) {
+  if (detectUnavailableService(text)) {
+    return buildUnavailableServiceReply({ text, phone });
+  }
+
   // 1. RECUPERAR HISTORIAL DESDE SUPABASE
   let contextPrompt = "";
   
@@ -140,57 +196,6 @@ export async function generateAIReply({ text, conversationContext = null, phone 
       const label = labels[conversationContext.servicePreference] || 'el servicio indicado';
       contextPrompt += `- ✅ El cliente indicó interés en ${label}\n`;
     }
-  }
-
-  // DETECCIÓN DE SERVICIOS NO OFRECIDOS
-  const unavailableServiceKeywords = [
-    /\b(neuropsicolog[íi]a|evaluaci[óo]n neurol[óo]gica)\b/i,
-    /\b(terapia ocupacional|ocupacional)\b/i,
-    /\b(psicopedag[óo]gico|psicopedagog[íi]a|dislexia|tdah)\b/i,
-    /\b(terapia aba|aba therapy|intervenci[óo]n temprana)\b/i,
-    /\b(terapia infantil|ni[ñn]os peque[ñn]os|beb[eée]s)\b/i
-  ];
-
-  const isUnavailableService = unavailableServiceKeywords.some(regex => regex.test(text));
-
-  if (isUnavailableService) {
-    console.log(`⚠️ Servicio no disponible detectado: ${phone}`);
-
-    const unavailableMessage =
-      "Actualmente no contamos con ese servicio especializado. " +
-      "Sin embargo, déjame conectarte con el equipo para que puedan " +
-      "orientarte sobre profesionales especializados que puedan ayudarte. 💙";
-
-    // Guardar en historial
-    if (phone) {
-      await saveMessage({
-        phone,
-        role: 'user',
-        content: text,
-        intent: 'servicio_no_disponible',
-        service: null
-      });
-
-      await saveMessage({
-        phone,
-        role: 'assistant',
-        content: unavailableMessage,
-        intent: 'servicio_no_disponible',
-        service: null
-      });
-    }
-
-    return {
-      message: unavailableMessage,
-      meta: {
-        intent: "servicio_no_disponible",
-        priority: "high",
-        notify_human: true,
-        service: null,
-        suggested_actions: ["transfer_to_specialist"],
-        confidence: 0.95
-      }
-    };
   }
 
   try {
@@ -627,14 +632,14 @@ if (availabilityKeywords.test(text)) {
     console.error("❌ AI error:", e?.message);
     return {
       message:
-        "Gracias por escribirnos 😊 En este momento estoy teniendo dificultades técnicas. Un miembro de mi equipo te atenderá en breve.",
+        "¡Hola! Soy el asistente virtual de *Feliz Horizonte* 🤖✨\n\nLe informamos que este número es de uso exclusivo para el envío de *recordatorios de citas*.\n\nPara agendar una cita, realizar consultas o recibir atención personalizada, por favor escriba a nuestra central de atención al cliente:\n\n📲 *WhatsApp:* +51 922 346 747\n\n¡Gracias por su comprensión! 💙",
       meta: {
-        intent: "error",
-        priority: "high",
+        intent: "info_redireccion",
+        priority: "low",
         notify_human: true,
         service: null,
         suggested_actions: [],
-        confidence: 0.1,
+        confidence: 1.0,
       },
     };
   }

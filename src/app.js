@@ -20,6 +20,13 @@ import {
 } from "./services/state.service.js";
 import { getConversationHistory } from "./services/conversation-history.service.js";
 import { buildHealthPayload, getBotMode } from "./utils/health.utils.js";
+import {
+  shouldUseReminderOnlyHandler,
+  summarizeInboundMessage,
+} from "./modules/whatsapp-inbound/router.js";
+import { handleReminderOnlyInbound } from "./modules/whatsapp-inbound/reminder-only-handler.js";
+import { safeLogInboundAudit } from "./modules/whatsapp-inbound/inbound-audit.js";
+import { loadConfig as loadReminderConfig } from "./services/reminders/core/config.js";
 
 dotenv.config();
 const app = express();
@@ -145,6 +152,15 @@ if (USE_WEBHOOK) {
 const ADMIN = (TELEGRAM_ADMIN_CHAT_ID || "").toString();
 const PANEL_CHAT_ID = (TELEGRAM_GROUP_CHAT_ID || "").toString();
 const PANEL_TOPIC_ID = Number(TELEGRAM_TOPIC_ID_DEFAULT || 0);
+let reminderConfigCache = null;
+
+function getReminderConfigForAudit() {
+  if (!reminderConfigCache) {
+    reminderConfigCache = loadReminderConfig();
+  }
+
+  return reminderConfigCache;
+}
 
 
 const HUMAN_TIMEOUT = 15 * 60 * 1000; // 15 minutos
@@ -2030,10 +2046,28 @@ app.post("/webhook/whatsapp", async (req, res) => {
       text = buttonSelection;
     }
 
+    let incomingTelegramLine = summarizeInboundMessage({ text, type: msg.type });
+
+    if (shouldUseReminderOnlyHandler(process.env)) {
+      console.log(`ℹ️ Modo "Solo Recordatorios" activo. Redirigiendo a ${from}`);
+      await handleReminderOnlyInbound({
+        from,
+        text,
+        type: msg.type,
+        env: process.env,
+        sendWhatsAppText,
+        notifyTelegram,
+        auditLogger: (payload) => safeLogInboundAudit(getReminderConfigForAudit(), payload),
+      });
+
+      return res.sendStatus(200);
+    }
+
     if (!text && audioPayload) {
       try {
         audioTranscriptionInfo = await transcribeWhatsAppAudio(msg);
         text = audioTranscriptionInfo.text?.trim();
+        incomingTelegramLine = summarizeInboundMessage({ text, type: msg.type });
 
         if (!text) {
           throw new Error("Transcripción vacía");
@@ -2108,7 +2142,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     const logPrefix = audioTranscriptionInfo ? "🎤 (audio)" : "💬";
     console.log(`${logPrefix} WhatsApp de ${from}: "${text}"`);
-    const incomingTelegramLine = `${audioTranscriptionInfo ? "🎤" : "💬"} "${text || '(sin texto)'}"`;
+    incomingTelegramLine = `${audioTranscriptionInfo ? "🎤" : "💬"} "${text || '(sin texto)'}"`;
 
     await ensureTopicForPhone(from);
 

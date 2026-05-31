@@ -3,9 +3,11 @@ node_modules/
 
 # Environment variables
 .env
+.env.*
 .env.local
 .env.production
 .env.development
+!.env.example
 
 # Vercel
 .vercel
@@ -34,3 +36,6 @@ topicMap.json
 # Build outputs
 dist/
 build/
+.env*.local
+.admin_api_key.local
+.calendly_webhook_secret.local

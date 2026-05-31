@@ -136,6 +136,9 @@ VERCEL=1
 VERCEL_ENV=production
 ADMIN_SETUP_KEY=clave_secreta_admin
 CALENDLY_THERAPY_URL=https://calendly.com/...
+APPOINTMENT_SOURCE=google
+CALENDLY_API_TOKEN=personal_access_token_de_calendly
+CALENDLY_WEBHOOK_SECRET=token_largo_para_webhook
 ```
 
 ## 6. Configurar webhooks finales
@@ -158,6 +161,44 @@ El bot se auto-configura en producción, pero puedes verificar:
 ```bash
 curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 ```
+
+### Calendly para recordatorios
+
+Modo recomendado con Calendly gratis: polling por API.
+
+```env
+APPOINTMENT_SOURCE=calendly_api
+CALENDLY_API_TOKEN=personal_access_token_de_calendly
+CALENDLY_TIMEZONE=America/Lima
+CALENDLY_LOOKAHEAD_DAYS=7
+```
+
+Si vas a usar Calendly como fuente de citas, configura:
+
+```env
+APPOINTMENT_SOURCE=calendly
+CALENDLY_WEBHOOK_SECRET=token_largo_para_webhook
+CALENDLY_TIMEZONE=America/Lima
+```
+
+Callback en Calendly:
+
+```text
+https://feliz-horizonte-bot.vercel.app/api/webhooks/calendly?token=CALENDLY_WEBHOOK_SECRET
+```
+
+Eventos:
+
+- `invitee.created`
+- `invitee.canceled`
+
+Para transición sin apagar Google Calendar, usa:
+
+```env
+APPOINTMENT_SOURCE=hybrid
+```
+
+Más detalle: `docs/CALENDLY_REMINDERS.md`.
 
 ## 7. Verificación
 

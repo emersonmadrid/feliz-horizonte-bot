@@ -37,6 +37,11 @@ const DEFAULT_CONVERSATION_STATE = {
 
 const stateStore = new Map();
 let expiredCount = 0;
+const isTestRuntime =
+  process.env.NODE_ENV === "test" ||
+  process.env.VITEST === "true" ||
+  Boolean(process.env.VITEST_WORKER_ID) ||
+  process.env.npm_lifecycle_event === "test";
 
 let supabaseEnabled = Boolean(SUPABASE_URL && SUPABASE_KEY);
 const supabase = supabaseEnabled ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
@@ -129,11 +134,13 @@ async function cleanupExpiredStates() {
   }
 }
 
-setInterval(() => {
-  cleanupExpiredStates().catch((err) => console.error("⚠️ Limpieza de estado falló:", err?.message || err));
-}, CLEANUP_MS).unref?.();
+if (!isTestRuntime) {
+  setInterval(() => {
+    cleanupExpiredStates().catch((err) => console.error("⚠️ Limpieza de estado falló:", err?.message || err));
+  }, CLEANUP_MS).unref?.();
 
-hydrateFromSupabase();
+  hydrateFromSupabase();
+}
 
 export async function getConversationState(phone) {
   await cleanupExpiredStates();
