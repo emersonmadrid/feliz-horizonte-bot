@@ -243,7 +243,7 @@ El motor no envia si:
 6. no marca `day_sent_at` ni `hour_sent_at`.
 7. no escribe filas en `whatsapp_message_log`.
 
-Para una prueba puntual sin cambiar variables en Vercel:
+Para una prueba puntual sin cambiar variables en Vercel, usa el secreto real del VPS o una variable local confirmada:
 
 ```bash
 curl -H "x-cron-secret: $CRON_SECRET" \
@@ -272,6 +272,14 @@ Respuesta esperada si hay recordatorios elegibles:
 ## VPS
 
 El VPS solo dispara el cron. No contiene la logica de recordatorios.
+
+Importante para pruebas y futuras automatizaciones:
+
+- La fuente de verdad del disparador es el VPS, no Vercel Cron ni GitHub Actions.
+- Vercel compila y aloja el endpoint, pero no inicia el recordatorio por si solo.
+- Para probar el flujo real, usa el script del VPS o el mismo secreto que usa ese script.
+- No asumas que `.env` local contiene `CRON_SECRET`; puede no existir o no coincidir con produccion.
+- Si una prueba local devuelve `401 Unauthorized`, revisa primero el secreto del VPS antes de depurar el modulo.
 
 Datos documentados:
 
@@ -315,6 +323,14 @@ Cron manual:
 ```bash
 curl -H "x-cron-secret: $CRON_SECRET" \
   https://feliz-horizonte-bot.vercel.app/api/cron/reminders
+```
+
+Dry-run manual desde el VPS, sin exponer el secreto:
+
+```bash
+SECRET=$(sed -n 's/.*Authorization: Bearer \([^"]*\).*/\1/p' /usr/local/bin/feliz-horizonte-reminders.sh)
+curl -H "Authorization: Bearer ${SECRET}" \
+  "https://feliz-horizonte-bot.vercel.app/api/cron/reminders?dry_run=true"
 ```
 
 En el VPS:
