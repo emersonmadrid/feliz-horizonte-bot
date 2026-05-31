@@ -8,6 +8,9 @@ Bot de atención al cliente inteligente para servicios de salud mental, integrad
 
 ## 🌟 Características
 
+> Antes de modificar endpoints, recordatorios o flujos de producción, revisar `docs/PROJECT_MAP.md`.
+> Ese documento resume la arquitectura real, qué ya existe y qué no conviene duplicar.
+
 ### 🧠 **IA Conversacional Avanzada**
 - Respuestas contextuales usando Google Gemini 2.5 Flash
 - Historial persistente de conversaciones en Supabase

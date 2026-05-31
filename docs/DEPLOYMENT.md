@@ -1,5 +1,8 @@
 # 🚀 Guía de Deployment
 
+> Antes de cambiar despliegue, cron, endpoints o variables, revisar `docs/PROJECT_MAP.md`.
+> El cron real de recordatorios vive en el VPS; Vercel solo aloja el endpoint.
+
 ## Requisitos Previos
 
 - [ ] Cuenta de Vercel

@@ -1,5 +1,7 @@
 # Recordatorios de citas
 
+> Para el mapa completo del proyecto, endpoints existentes y zonas que no conviene duplicar, revisar `docs/PROJECT_MAP.md`.
+
 Este modulo vive dentro de `feliz-horizonte-bot` y envia recordatorios de citas por WhatsApp usando Vercel como API de produccion. El VPS no contiene la logica de negocio: solo llama periodicamente el endpoint del cron.
 
 ## Componentes
