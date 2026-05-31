@@ -145,14 +145,6 @@ export async function runReminderEngine(config, mockedAppointments = null) {
   }
 
   if (config.remindersDryRun) {
-    for (const appointment of sameDayAppointments) {
-      await logSkippedReminder(config, appointment, "day", "dry_run");
-    }
-
-    for (const appointment of oneHourAppointments) {
-      await logSkippedReminder(config, appointment, "hour", "dry_run");
-    }
-
     return buildDryRunSummary(sameDayAppointments, oneHourAppointments);
   }
 

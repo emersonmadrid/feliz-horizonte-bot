@@ -238,9 +238,10 @@ El motor no envia si:
 1. sincroniza Calendly o Google segun `APPOINTMENT_SOURCE`,
 2. actualiza/cancela citas locales segun corresponda,
 3. calcula recordatorios elegibles,
-4. registra `skipped` con `skip_reason=dry_run`,
+4. devuelve `skipped` con `reason=dry_run` solo en la respuesta,
 5. no llama a Meta WhatsApp,
 6. no marca `day_sent_at` ni `hour_sent_at`.
+7. no escribe filas en `whatsapp_message_log`.
 
 Para una prueba puntual sin cambiar variables en Vercel:
 
