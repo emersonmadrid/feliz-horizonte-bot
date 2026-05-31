@@ -200,6 +200,38 @@ APPOINTMENT_SOURCE=hybrid
 
 Más detalle: `docs/CALENDLY_REMINDERS.md`.
 
+### VPS de recordatorios
+
+El scheduler de recordatorios no corre dentro del bot local. En produccion, el VPS solo dispara el endpoint de Vercel cada 5 minutos mediante `systemd`.
+
+Componentes esperados en el VPS:
+
+```text
+timer: feliz-horizonte-reminders.timer
+service: feliz-horizonte-reminders.service
+script: /usr/local/bin/feliz-horizonte-reminders.sh
+```
+
+El script debe llamar al bot integrado:
+
+```text
+https://feliz-horizonte-bot.vercel.app/api/cron/reminders
+```
+
+Comandos de verificacion:
+
+```bash
+systemctl status feliz-horizonte-reminders.timer
+systemctl status feliz-horizonte-reminders.service
+journalctl -u feliz-horizonte-reminders.service -n 50 --no-pager
+```
+
+Para ejecutar una corrida manual:
+
+```bash
+systemctl start feliz-horizonte-reminders.service
+```
+
 ## 7. Verificación
 
 ### Ejecutar pruebas locales
