@@ -145,6 +145,8 @@ Carpeta principal:
 src/services/reminders
 ```
 
+El limite del modulo esta definido con mas detalle en `docs/REMINDER_BOUNDARY.md`.
+
 Capas actuales:
 
 ```text
