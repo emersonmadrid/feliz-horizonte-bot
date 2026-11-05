@@ -1642,6 +1642,16 @@ app.get("/health", async (_req, res) => {
   res.status(payload.ok ? 200 : 503).json(payload);
 });
 
+app.post("/", (req, res) => {
+  res.json({
+    url: req.url,
+    originalUrl: req.originalUrl,
+    matchedPath: req.headers["x-matched-path"],
+    invokePath: req.headers["x-invoke-path"],
+    forwardedUri: req.headers["x-forwarded-uri"]
+  });
+});
+
 app.get("/", (_req, res) => {
   res.json({
     status: "✅ FH WhatsApp Bot activo",
