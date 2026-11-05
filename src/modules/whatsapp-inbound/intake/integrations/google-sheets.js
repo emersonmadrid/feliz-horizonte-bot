@@ -10,7 +10,7 @@ function base64UrlEncode(input) {
     .replace(/=+$/g, '');
 }
 
-async function getAccessToken(config) {
+export async function getAccessToken(config) {
   const now = Math.floor(Date.now() / 1000);
   if (cachedToken && cachedToken.expiresAt > now + 60) {
     return cachedToken.token;
@@ -291,7 +291,7 @@ export async function findPatient(target, config) {
   const pacData = await pacRes.json();
   const pacRows = pacData.values || [];
 
-  const cleanTarget = String(target).trim();
+  const cleanTarget = String(target).trim().replace(/^#/, '');
   const cleanTargetNorm = stripAccents(cleanTarget);
   const digits = cleanTarget.replace(/\D/g, '');
 
@@ -356,6 +356,12 @@ export async function findPatient(target, config) {
       return { found: true, patient: matches[0] };
     }
     if (matches.length > 1) {
+      // Desempate por coincidencia exacta de nombre completo (ej: "Emerson Madrid" vs "Emerson Madrid Herrera")
+      const exactMatches = matches.filter(m => stripAccents(m.nombre) === cleanTargetNorm);
+      if (exactMatches.length === 1) {
+        return { found: true, patient: exactMatches[0] };
+      }
+
       return {
         found: false,
         reason: 'multiple',

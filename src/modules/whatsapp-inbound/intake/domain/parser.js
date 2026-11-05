@@ -217,7 +217,7 @@ Debes responder ÚNICAMENTE con un objeto JSON con los siguientes campos:
   * "NUEVO_PACIENTE": Si el mensaje contiene datos de contacto para dar de alta a un NUEVO paciente (nombres, apellidos, celular, correo, fecha de nacimiento) o un mensaje/chat reenviado de admisión.
   * "AYUDA_O_SALUDO": Si el mensaje es un saludo (hola, buenos días, etc.), una consulta general sobre qué puede hacer, o pide el menú/ayuda.
 
-- "target": Nombre, ID o celular del paciente referido en el mensaje (ej: "Kevin Vásquez", "Kevin", "188", "960492045", "Valeria Mendoza"). Si es un alta de paciente nuevo o no se identifica, null.
+- "target": Nombre, ID o celular del paciente referido en el mensaje (ej: "Kevin Vásquez", "Kevin", "188", "#128", "128", "Valeria Mendoza", "Emerson Madrid"). Si se indica un ID con # (ej: "#128"), el target es "128". Si es un alta de paciente nuevo o no se identifica, null.
 
 - "historia": Si el intent es "HISTORIA_CLINICA", objeto con:
   * "motivo": Resumen claro de lo que refiere el paciente o motivo de la sesión.
@@ -245,10 +245,15 @@ export async function classifyAndParseStaffMessage(text, config) {
 
   const parsed = JSON.parse(rawJson);
 
-  let target = parsed.target ? String(parsed.target).trim() : null;
+  let target = parsed.target ? String(parsed.target).trim().replace(/^#/, '') : null;
   if (!target) {
-    const m = text.match(/(?:#|\/)?(?:historia|consulta|sesion|sesión|evolucion|evolución|actualizar|modificar|agregar)\s+([A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s]{2,30})/i);
-    if (m) target = m[1].trim();
+    const idMatch = text.match(/#(\d{1,5})\b/) || text.match(/\b(?:id|paciente)\s*#?(\d{1,5})\b/i);
+    if (idMatch) {
+      target = idMatch[1];
+    } else {
+      const m = text.match(/(?:#|\/)?(?:historia|consulta|sesion|sesión|evolucion|evolución|actualizar|modificar|agregar|paciente)\s*(?:#|de\s+|para\s+|del\s+paciente\s+)?([A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s]{2,35}?)(?:[:,\.\n]|$)/i);
+      if (m) target = m[1].trim();
+    }
   }
 
   const res = {
