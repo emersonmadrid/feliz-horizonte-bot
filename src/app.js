@@ -33,13 +33,25 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Normalización de rutas para Vercel rewrites (?__path=$1)
+// Normalización de ruta en Express
 app.use((req, _res, next) => {
-  if (req.query && req.query.__path) {
-    const rawPath = Array.isArray(req.query.__path) ? req.query.__path[0] : req.query.__path;
-    req.url = '/' + String(rawPath).replace(/^\/+/, '');
+  const target = req.headers["x-matched-path"] || (req.query && req.query.__path);
+  if (target && target !== "null" && target !== "undefined") {
+    req.url = "/" + String(target).replace(/^\/+/, "");
+  } else if (req.url.startsWith("/src/app.js")) {
+    const stripped = req.url.replace(/^\/src\/app\.js/, "");
+    req.url = stripped.startsWith("/") ? stripped : "/" + stripped;
   }
   next();
+});
+
+app.get("/debug-url", (req, res) => {
+  res.json({
+    url: req.url,
+    originalUrl: req.originalUrl,
+    query: req.query,
+    matchedPath: req.headers["x-matched-path"]
+  });
 });
 
 const {
@@ -2531,11 +2543,4 @@ if (VERCEL !== "1") {
   app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
 }
 
-export default (req, res) => {
-  if (req.headers["x-matched-path"]) {
-    req.url = req.headers["x-matched-path"];
-  } else if (req.url.startsWith("/src/app.js")) {
-    req.url = req.url.replace(/^\/src\/app\.js/, "") || "/";
-  }
-  return app(req, res);
-};
+export default app;
