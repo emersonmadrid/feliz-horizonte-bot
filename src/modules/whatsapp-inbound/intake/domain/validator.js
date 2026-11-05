@@ -10,22 +10,21 @@ export function validatePatient(p) {
     errors.push('Los apellidos son requeridos');
   }
 
-  if (p.telefono) {
-    if (!/^\d{9}$/.test(p.telefono)) {
-      warnings.push(`El teléfono '${p.telefono}' no tiene formato estándar de 9 dígitos`);
-    }
-  } else {
-    warnings.push('No se proporcionó número de teléfono');
+  // Teléfono obligatorio
+  if (!p.telefono || p.telefono.trim().length === 0) {
+    errors.push('El teléfono es obligatorio');
+  } else if (!/^\d{9}$/.test(p.telefono)) {
+    errors.push(`El teléfono '${p.telefono}' debe tener 9 dígitos numéricos`);
   }
 
-  if (p.email) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) {
-      errors.push(`El email '${p.email}' tiene un formato inválido`);
-    }
-  } else {
-    warnings.push('No se proporcionó correo electrónico');
+  // Correo electrónico obligatorio
+  if (!p.email || p.email.trim().length === 0) {
+    errors.push('El correo electrónico es obligatorio');
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) {
+    errors.push(`El correo '${p.email}' tiene un formato inválido`);
   }
 
+  // Fecha de nacimiento (opcional, si viene debe ser válida y no futura)
   if (p.fechaNacimiento) {
     const d = new Date(p.fechaNacimiento);
     if (isNaN(d.getTime())) {
@@ -33,10 +32,9 @@ export function validatePatient(p) {
     } else if (d > new Date()) {
       errors.push('La fecha de nacimiento no puede ser futura');
     }
-  } else {
-    warnings.push('No se proporcionó fecha de nacimiento');
   }
 
+  // DNI (opcional, si viene advertir si no tiene 8 dígitos)
   if (p.dni) {
     if (!/^\d{8}$/.test(p.dni)) {
       warnings.push(`DNI '${p.dni}' no tiene 8 dígitos`);
