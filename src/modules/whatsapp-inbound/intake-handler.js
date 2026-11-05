@@ -6,7 +6,9 @@ export function isIntakeMessage({ text, from, env = process.env }) {
 
   // REGLA FUNDAMENTAL: Solo la psicóloga o administradores autorizados.
   // NUNCA interactuar con pacientes para este flujo.
-  const authorizedPhones = (env.AUTHORIZED_STAFF_PHONES || "51922346747,51950293393")
+  // 51922346747: Psicóloga Feliz Horizonte
+  // 51936597327: Emerson Madrid
+  const authorizedPhones = (env.AUTHORIZED_STAFF_PHONES || "51922346747,51936597327")
     .split(",")
     .map(p => p.trim().replace(/\D/g, ""))
     .filter(Boolean);

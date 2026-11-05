@@ -16,7 +16,7 @@ export function loadConfig(env = process.env) {
     throw new Error(`Configuración incompleta. Faltan variables: ${missing.join(', ')}`);
   }
 
-  const staffPhones = (env.AUTHORIZED_STAFF_PHONES || '51922346747,51950293393')
+  const staffPhones = (env.AUTHORIZED_STAFF_PHONES || '51922346747,51936597327')
     .split(',')
     .map(p => p.trim().replace(/\D/g, ''))
     .filter(Boolean);
