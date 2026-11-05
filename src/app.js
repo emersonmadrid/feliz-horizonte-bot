@@ -2521,4 +2521,11 @@ if (VERCEL !== "1") {
   app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
 }
 
-export default (req, res) => app(req, res);
+export default (req, res) => {
+  if (req.headers["x-matched-path"]) {
+    req.url = req.headers["x-matched-path"];
+  } else if (req.url.startsWith("/src/app.js")) {
+    req.url = req.url.replace(/^\/src\/app\.js/, "") || "/";
+  }
+  return app(req, res);
+};
