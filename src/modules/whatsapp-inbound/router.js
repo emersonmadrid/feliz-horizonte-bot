@@ -42,7 +42,21 @@ export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
     cleanBody.startsWith("/agregar") ||
     cleanBody.startsWith("agregar ") ||
     cleanBody.startsWith("#update") ||
-    cleanBody.startsWith("/update")
+    cleanBody.startsWith("/update") ||
+    cleanBody.startsWith("#historia") ||
+    cleanBody.startsWith("/historia") ||
+    cleanBody.startsWith("historia ") ||
+    cleanBody.startsWith("#consulta") ||
+    cleanBody.startsWith("/consulta") ||
+    cleanBody.startsWith("consulta ") ||
+    cleanBody.startsWith("#sesion") ||
+    cleanBody.startsWith("/sesion") ||
+    cleanBody.startsWith("#sesión") ||
+    cleanBody.startsWith("/sesión") ||
+    cleanBody.startsWith("#evolucion") ||
+    cleanBody.startsWith("/evolucion") ||
+    cleanBody.startsWith("#evolución") ||
+    cleanBody.startsWith("/evolución")
   ) {
     return true;
   }

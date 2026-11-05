@@ -157,3 +157,50 @@ export async function parsePatientUpdateFromText(text, config) {
     observaciones: parsed.observaciones ? String(parsed.observaciones).trim() : null
   };
 }
+
+const SYSTEM_INSTRUCTION_CLINICAL = `Eres el asistente clínico de registros y evolución médica del Centro Psicológico y Psiquiátrico 'Feliz Horizonte'.
+Tu labor es interpretar mensajes del personal médico (psicólogos/psiquiatras) que relatan una sesión de terapia, consulta o evolución clínica de un paciente para registrarla formalmente en su Historia Clínica.
+
+Debes responder ÚNICAMENTE con un objeto JSON con los siguientes campos:
+- "target": El identificador del paciente provisto en el mensaje (ej: "188", "191", o número de celular si aplica). Si no se indica, null.
+- "fecha": Fecha de la consulta si se menciona explícitamente en el texto; si no, null.
+- "motivo": Motivo principal de la consulta o lo que el paciente relata en la sesión (resumido de forma clara y profesional).
+- "sintomas": Síntomas observados o manifestados (ej: impulsos sexuales descontrolados, pensamientos obsesivos, aislamiento social, baja tolerancia a la frustración, etc.).
+- "diagnostico": Diagnóstico presuntivo o conclusión clínica si se menciona; si no, cadena vacía.
+- "tratamiento": Técnicas aplicadas en la sesión (ej: TREC, técnica de coste-beneficio, activación conductual), tareas asignadas, material enviado o plan terapéutico.
+- "observaciones": Observaciones clínicas del terapeuta, examen mental o conducta observada (ej: historia familiar, creencias irracionales de condena, rigidez cognitiva).
+- "signos": Signos psicopatológicos o de conducta observados si se desprenden; si no, cadena vacía.
+- "medico": Nombre del profesional si se menciona explícitamente en el texto; si no, null.`;
+
+export async function parseClinicalHistoryFromText(text, config) {
+  if (!text || !text.trim()) {
+    throw new Error('Texto de entrada vacío');
+  }
+
+  const rawJson = await callGeminiGenerate({
+    prompt: text,
+    systemInstruction: SYSTEM_INSTRUCTION_CLINICAL,
+    config
+  });
+
+  const parsed = JSON.parse(rawJson);
+
+  let target = parsed.target ? String(parsed.target).trim() : null;
+  // Respaldo regex para extraer target si el LLM lo omitió
+  if (!target) {
+    const m = text.match(/(?:#|\/)?(?:historia|consulta|sesion|sesión|evolucion|evolución|actualizar|modificar|agregar)\s+(\d{1,9})/i);
+    if (m) target = m[1];
+  }
+
+  return {
+    target: target,
+    fecha: parsed.fecha ? String(parsed.fecha).trim() : null,
+    motivo: parsed.motivo ? String(parsed.motivo).trim() : '',
+    sintomas: parsed.sintomas ? String(parsed.sintomas).trim() : '',
+    diagnostico: parsed.diagnostico ? String(parsed.diagnostico).trim() : '',
+    tratamiento: parsed.tratamiento ? String(parsed.tratamiento).trim() : '',
+    observaciones: parsed.observaciones ? String(parsed.observaciones).trim() : '',
+    signos: parsed.signos ? String(parsed.signos).trim() : '',
+    medico: parsed.medico ? String(parsed.medico).trim() : null
+  };
+}

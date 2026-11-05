@@ -445,3 +445,156 @@ export async function updatePatientRow(target, updates, updaterEmail, config) {
     modifiedFields
   };
 }
+
+export async function insertClinicalHistoryRow({ target, historyData, senderPhone, config }) {
+  const token = await getAccessToken(config);
+
+  // 1. Validar que el paciente exista en Pacientes
+  const pacUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:X`;
+  const pacRes = await fetch(pacUrl, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!pacRes.ok) {
+    throw new Error(`Error consultando Pacientes: ${pacRes.statusText}`);
+  }
+  const pacData = await pacRes.json();
+  const pacRows = pacData.values || [];
+
+  const cleanTarget = String(target || '').trim();
+  const cleanTargetDigits = cleanTarget.replace(/\D/g, '');
+
+  let matchedPatient = null;
+  for (let i = 0; i < pacRows.length; i++) {
+    const row = pacRows[i];
+    const rowId = String(row[0] || '').trim();
+    const rowPhone = String(row[6] || '').replace(/\D/g, '');
+    const rowNombre = `${row[1] || ''} ${row[2] || ''}`.trim();
+
+    if (cleanTarget === rowId) {
+      matchedPatient = { id: rowId, nombre: rowNombre, estado: row[18] };
+      break;
+    }
+    if (cleanTargetDigits.length >= 8 && rowPhone && (rowPhone === cleanTargetDigits || rowPhone.endsWith(cleanTargetDigits) || cleanTargetDigits.endsWith(rowPhone))) {
+      matchedPatient = { id: rowId, nombre: rowNombre, estado: row[18] };
+      break;
+    }
+    if (cleanTarget.length >= 4 && isNaN(Number(cleanTarget))) {
+      if (rowNombre.toLowerCase().includes(cleanTarget.toLowerCase())) {
+        matchedPatient = { id: rowId, nombre: rowNombre, estado: row[18] };
+        break;
+      }
+    }
+  }
+
+  if (!matchedPatient) {
+    return { success: false, reason: 'not_found', target: cleanTarget };
+  }
+
+  if (String(matchedPatient.estado || '').trim().toUpperCase() === 'ARCHIVADO') {
+    return { success: false, reason: 'archived', id: matchedPatient.id, nombre: matchedPatient.nombre };
+  }
+
+  // 2. Obtener siguiente ID en Historia
+  const histIdUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Historia!A:A`;
+  const histIdRes = await fetch(histIdUrl, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!histIdRes.ok) {
+    throw new Error(`Error consultando IDs en Historia: ${histIdRes.statusText}`);
+  }
+  const histIdData = await histIdRes.json();
+  const histRows = histIdData.values || [];
+  let maxId = 0;
+  for (let i = 1; i < histRows.length; i++) {
+    const n = parseInt(histRows[i][0], 10);
+    if (!isNaN(n) && n > maxId) maxId = n;
+  }
+  const nextHistoryId = maxId + 1;
+
+  // 3. Determinar el médico o psicólogo tratante
+  let medico = historyData.medico || '';
+  if (!medico) {
+    const cleanSender = String(senderPhone || '').replace(/\D/g, '');
+    if (cleanSender.includes('922346747')) {
+      medico = 'HUAUYA MACAVILCA CINTYA';
+    } else if (cleanSender.includes('936597327')) {
+      medico = 'EMERSON MADRID';
+    } else {
+      medico = 'STAFF FELIZ HORIZONTE';
+    }
+  }
+
+  const nowPeru = formatPeruDate();
+  const fechaConsulta = historyData.fecha || nowPeru;
+
+  // Estructura de Historia en Consultorio:
+  // 1:ID, 2:ID_PACIENTE, 3:FECHA, 4:MOTIVO, 5:SINTOMAS, 6:DIAGNOSTICO, 7:TRATAMIENTO, 8:OBSERVACIONES, 9:MEDICO, 10:SIGNOS, 11:ESTADO
+  const newRow = [
+    String(nextHistoryId),
+    String(matchedPatient.id),
+    fechaConsulta,
+    historyData.motivo || '',
+    historyData.sintomas || '',
+    historyData.diagnostico || '',
+    historyData.tratamiento || '',
+    historyData.observaciones || '',
+    medico,
+    historyData.signos || '',
+    'ACTIVO'
+  ];
+
+  const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Historia!A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
+  const appendRes = await fetch(appendUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ values: [newRow] })
+  });
+
+  if (!appendRes.ok) {
+    const errText = await appendRes.text();
+    throw new Error(`Error insertando fila en Historia: ${errText}`);
+  }
+
+  // Registrar en Auditoria
+  try {
+    const auditUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Auditoria!A1:append?valueInputOption=USER_ENTERED`;
+    await fetch(auditUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        values: [[
+          nowPeru,
+          'CREAR',
+          'HISTORIA',
+          String(nextHistoryId),
+          JSON.stringify({
+            origen: 'whatsapp_clinical_history',
+            pacienteId: matchedPatient.id,
+            pacienteNombre: matchedPatient.nombre,
+            medico: medico,
+            creadoPor: `whatsapp:${senderPhone}`
+          })
+        ]]
+      })
+    });
+  } catch (auditErr) {
+    console.warn('Auditoría no registrada (no crítico):', auditErr.message);
+  }
+
+  return {
+    success: true,
+    historyId: nextHistoryId,
+    patientId: matchedPatient.id,
+    patientName: matchedPatient.nombre,
+    fecha: fechaConsulta,
+    medico: medico,
+    motivo: historyData.motivo,
+    tratamiento: historyData.tratamiento
+  };
+}

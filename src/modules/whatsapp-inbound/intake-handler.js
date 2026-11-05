@@ -1,7 +1,13 @@
 import { loadConfig } from "./intake/core/config.js";
 import { processPatientIntake } from "./intake/services/intake-orchestrator.js";
-import { parsePatientUpdateFromText } from "./intake/domain/parser.js";
-import { updatePatientRow } from "./intake/integrations/google-sheets.js";
+import {
+  parsePatientUpdateFromText,
+  parseClinicalHistoryFromText,
+} from "./intake/domain/parser.js";
+import {
+  updatePatientRow,
+  insertClinicalHistoryRow,
+} from "./intake/integrations/google-sheets.js";
 import {
   getConversationState,
   mergeConversationState,
@@ -9,6 +15,125 @@ import {
 } from "../../services/state.service.js";
 
 const DRAFT_TTL_MS = 15 * 60 * 1000; // 15 minutos para completar un registro por partes
+
+async function handleClinicalHistoryFlow({
+  from,
+  text,
+  config,
+  sendWhatsAppText,
+  notifyTelegram,
+  auditLogger,
+}) {
+  try {
+    const parsed = await parseClinicalHistoryFromText(text, config);
+
+    if (!parsed.target) {
+      const errorMsg =
+        "⚠️ *Falta el identificador del paciente para la Historia Clínica:*\n" +
+        "Por favor indica el ID (ej: 188) o número de celular del paciente.\n\n" +
+        "*Ejemplo:*\n" +
+        "`#historia 188 Paciente acude refiriendo ansiedad por problemas familiares. Se aplica TREC y reestructuración cognitiva.`";
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, errorMsg);
+      }
+      return { ok: false, reason: "missing_target" };
+    }
+
+    if (!parsed.motivo && !parsed.tratamiento && !parsed.observaciones) {
+      const errorMsg =
+        `⚠️ *No se detectaron notas clínicas para el paciente #${parsed.target}.*\n\n` +
+        "*Ejemplo:*\n" +
+        `\`#historia ${parsed.target} Paciente refiere insomnio y estrés laboral. Se aplica técnica de relajación progresiva.\``;
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, errorMsg);
+      }
+      return { ok: false, reason: "no_clinical_notes" };
+    }
+
+    const result = await insertClinicalHistoryRow({
+      target: parsed.target,
+      historyData: parsed,
+      senderPhone: from,
+      config,
+    });
+
+    if (!result.success) {
+      let errorMsg = `⚠️ No se pudo registrar la consulta: ${result.reason}`;
+      if (result.reason === "not_found") {
+        errorMsg =
+          `⚠️ *No se encontró ningún paciente con el ID o celular:* \`${parsed.target}\`\n` +
+          "Verifica el identificador en el sistema web.";
+      } else if (result.reason === "archived") {
+        errorMsg =
+          `⚠️ *El paciente #${result.id} (${result.nombre}) está archivado.*\n` +
+          "No se pueden registrar consultas en pacientes archivados.";
+      }
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, errorMsg);
+      }
+      return { ok: false, reason: result.reason };
+    }
+
+    // Éxito: confirmar por WhatsApp
+    const lines = [
+      `✅ *Consulta registrada en la Historia Clínica:*`,
+      `• Paciente: *#${result.patientId} (${result.patientName})*`,
+      `• Fecha: *${result.fecha}*`,
+      `• Profesional: *${result.medico}*`,
+    ];
+    if (result.motivo) {
+      lines.push(`• Motivo: *${result.motivo.slice(0, 120)}${result.motivo.length > 120 ? "..." : ""}*`);
+    }
+    if (result.tratamiento) {
+      lines.push(`• Tratamiento: *${result.tratamiento.slice(0, 120)}${result.tratamiento.length > 120 ? "..." : ""}*`);
+    }
+    lines.push("");
+    lines.push("🔗 *Ya visible en:* https://app.felizhorizonte.pe");
+
+    const responseText = lines.join("\n");
+
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, responseText);
+    }
+
+    if (typeof notifyTelegram === "function") {
+      await notifyTelegram(
+        "🧠 NUEVA CONSULTA / HISTORIA CLÍNICA",
+        [
+          `Paciente: #${result.patientId} ${result.patientName}`,
+          `Especialista: ${result.medico}`,
+          `Motivo: ${result.motivo || "No especificado"}`,
+          `Tratamiento: ${result.tratamiento || "No especificado"}`,
+          `Registrado por: WhatsApp ${from}`,
+        ],
+        from
+      );
+    }
+
+    if (typeof auditLogger === "function") {
+      await auditLogger({
+        phone: from,
+        messageText: text,
+        messageType: "text",
+        route: "staff_intake",
+        action: "history_entry_created",
+        status: "handled",
+        metadata: {
+          historyId: result.historyId,
+          patientId: result.patientId,
+        },
+      });
+    }
+
+    return { ok: true, data: result };
+  } catch (err) {
+    console.error("❌ Error en handleClinicalHistoryFlow:", err.message);
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, `⚠️ Error guardando consulta en Historia Clínica: ${err.message}`);
+    }
+    return { ok: false, error: err.message };
+  }
+}
 
 async function handlePatientUpdateFlow({
   from,
@@ -19,6 +144,39 @@ async function handlePatientUpdateFlow({
   auditLogger,
 }) {
   try {
+    const cleanLower = text.toLowerCase();
+    // Detección inteligente: Si es un relato clínico detallado enviado con #actualizar
+    const isClinicalContent =
+      cleanLower.includes("paciente refiere") ||
+      cleanLower.includes("sesión") ||
+      cleanLower.includes("sesion") ||
+      cleanLower.includes("tratamiento") ||
+      cleanLower.includes("terapia") ||
+      cleanLower.includes("conductual");
+
+    const hasDemographicKeywords =
+      cleanLower.includes("dni") ||
+      cleanLower.includes("correo") ||
+      cleanLower.includes("email") ||
+      cleanLower.includes("celular") ||
+      cleanLower.includes("teléfono") ||
+      cleanLower.includes("telefono") ||
+      cleanLower.includes("dirección") ||
+      cleanLower.includes("direccion") ||
+      cleanLower.includes("trabajo");
+
+    if (isClinicalContent && !hasDemographicKeywords) {
+      console.log(`🧠 [INTELIGENCIA CLÍNICA] Redirigiendo reporte clínico a Historia Clínica de ${from}`);
+      return await handleClinicalHistoryFlow({
+        from,
+        text,
+        config,
+        sendWhatsAppText,
+        notifyTelegram,
+        auditLogger,
+      });
+    }
+
     const parsed = await parsePatientUpdateFromText(text, config);
 
     if (!parsed.target) {
@@ -161,7 +319,20 @@ export async function handleStaffIntakeInbound({
     return { ok: true, cancelled: true };
   }
 
-  // 2. Comando de actualización / modificación de ficha existente
+  // 2. Comando explícito de Historia Clínica / Consulta / Sesión
+  const isClinicalCommand = /^(#|\/)?(historia|consulta|sesion|sesión|evolucion|evolución)\b/i.test(text.trim());
+  if (isClinicalCommand) {
+    return await handleClinicalHistoryFlow({
+      from,
+      text,
+      config: loadConfig(env),
+      sendWhatsAppText,
+      notifyTelegram,
+      auditLogger,
+    });
+  }
+
+  // 3. Comando de actualización / modificación de ficha existente
   const isUpdateCommand = /^(#|\/)?(actualizar|modificar|agregar|update)\b/i.test(text.trim());
   if (isUpdateCommand) {
     return await handlePatientUpdateFlow({
