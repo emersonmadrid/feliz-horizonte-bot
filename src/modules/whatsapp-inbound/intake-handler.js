@@ -3,6 +3,7 @@ import { processPatientIntake } from "./intake/services/intake-orchestrator.js";
 import {
   parsePatientUpdateFromText,
   parseClinicalHistoryFromText,
+  classifyAndParseStaffMessage,
 } from "./intake/domain/parser.js";
 import {
   updatePatientRow,
@@ -14,67 +15,78 @@ import {
   deleteConversationState,
 } from "../../services/state.service.js";
 
-const DRAFT_TTL_MS = 15 * 60 * 1000; // 15 minutos para completar un registro por partes
+const DRAFT_TTL_MS = 15 * 60 * 1000; // 15 minutos para borrador por partes
 
-async function handleClinicalHistoryFlow({
+function buildHelpMenu(from) {
+  const isDoctora = String(from).includes("922346747");
+  const nombreStaff = isDoctora ? "Lic. Cintya" : "Emerson";
+  return (
+    `👋 ¡Hola, *${nombreStaff}*! Soy tu Asistente Clínico de *Feliz Horizonte*.\n\n` +
+    `Puedes escribirme o dictarme audios con total libertad para gestionar el consultorio:\n\n` +
+    `1️⃣ *Registrar Consulta / Sesión de Terapia:*\n` +
+    `👉 _"Sesión de Kevin Vásquez: acude refiriendo impulsos voyeristas, se trabajó técnica de coste-beneficio y se envía libro de TREC"_\n\n` +
+    `2️⃣ *Actualizar Datos de un Paciente:*\n` +
+    `👉 _"El DNI de Valeria Mendoza es 71234567 y trabaja en BCP"_\n` +
+    `👉 _"Kevin Vásquez ahora vive en Miraflores"_\n\n` +
+    `3️⃣ *Nuevo Paciente (Alta):*\n` +
+    `👉 _Reenvíame el mensaje del paciente o escribe su nombre, celular y correo._\n\n` +
+    `💡 *Cero comandos:* Solo menciona el nombre o ID del paciente y yo me encargo de asociarlo y ordenarlo en la web.`
+  );
+}
+
+async function handleClinicalHistoryDirect({
   from,
-  text,
+  target,
+  historiaData,
+  rawText,
   config,
   sendWhatsAppText,
   notifyTelegram,
   auditLogger,
 }) {
   try {
-    const parsed = await parseClinicalHistoryFromText(text, config);
-
-    if (!parsed.target) {
+    if (!target) {
       const errorMsg =
-        "⚠️ *Falta el identificador del paciente para la Historia Clínica:*\n" +
-        "Por favor indica el ID (ej: 188) o número de celular del paciente.\n\n" +
+        "⚠️ *Falta el nombre o identificador del paciente para registrar la consulta.*\n\n" +
         "*Ejemplo:*\n" +
-        "`#historia 188 Paciente acude refiriendo ansiedad por problemas familiares. Se aplica TREC y reestructuración cognitiva.`";
+        `_"Sesión de Kevin Vásquez: acude por ansiedad laboral, se aplicó relajación progresiva..."_`;
       if (typeof sendWhatsAppText === "function") {
         await sendWhatsAppText(from, errorMsg);
       }
       return { ok: false, reason: "missing_target" };
     }
 
-    if (!parsed.motivo && !parsed.tratamiento && !parsed.observaciones) {
-      const errorMsg =
-        `⚠️ *No se detectaron notas clínicas para el paciente #${parsed.target}.*\n\n` +
-        "*Ejemplo:*\n" +
-        `\`#historia ${parsed.target} Paciente refiere insomnio y estrés laboral. Se aplica técnica de relajación progresiva.\``;
-      if (typeof sendWhatsAppText === "function") {
-        await sendWhatsAppText(from, errorMsg);
-      }
-      return { ok: false, reason: "no_clinical_notes" };
-    }
-
     const result = await insertClinicalHistoryRow({
-      target: parsed.target,
-      historyData: parsed,
+      target,
+      historyData: historiaData,
       senderPhone: from,
       config,
     });
 
     if (!result.success) {
       let errorMsg = `⚠️ No se pudo registrar la consulta: ${result.reason}`;
-      if (result.reason === "not_found") {
+      if (result.reason === "multiple") {
         errorMsg =
-          `⚠️ *No se encontró ningún paciente con el ID o celular:* \`${parsed.target}\`\n` +
-          "Verifica el identificador en el sistema web.";
+          `⚠️ *Encontré varios pacientes que coinciden con "${target}":*\n` +
+          result.matches.map((m, i) => `${i + 1}) #${m.id}: *${m.nombre}*`).join("\n") +
+          `\n\nPor favor indícame su nombre completo o ID (ej: "188").`;
+      } else if (result.reason === "not_found") {
+        errorMsg =
+          `⚠️ *No se encontró ningún paciente con el nombre o ID:* \`${target}\`\n` +
+          "Verifica el nombre en el sistema web.";
       } else if (result.reason === "archived") {
         errorMsg =
           `⚠️ *El paciente #${result.id} (${result.nombre}) está archivado.*\n` +
           "No se pueden registrar consultas en pacientes archivados.";
       }
+
       if (typeof sendWhatsAppText === "function") {
         await sendWhatsAppText(from, errorMsg);
       }
       return { ok: false, reason: result.reason };
     }
 
-    // Éxito: confirmar por WhatsApp
+    // Confirmación formateada
     const lines = [
       `✅ *Consulta registrada en la Historia Clínica:*`,
       `• Paciente: *#${result.patientId} (${result.patientName})*`,
@@ -82,13 +94,13 @@ async function handleClinicalHistoryFlow({
       `• Profesional: *${result.medico}*`,
     ];
     if (result.motivo) {
-      lines.push(`• Motivo: *${result.motivo.slice(0, 120)}${result.motivo.length > 120 ? "..." : ""}*`);
+      lines.push(`• Motivo: *${result.motivo.slice(0, 110)}${result.motivo.length > 110 ? "..." : ""}*`);
     }
     if (result.tratamiento) {
-      lines.push(`• Tratamiento: *${result.tratamiento.slice(0, 120)}${result.tratamiento.length > 120 ? "..." : ""}*`);
+      lines.push(`• Tratamiento: *${result.tratamiento.slice(0, 110)}${result.tratamiento.length > 110 ? "..." : ""}*`);
     }
     lines.push("");
-    lines.push("🔗 *Ya visible en:* https://app.felizhorizonte.pe");
+    lines.push("🔗 *Ya visible en la web:* https://app.felizhorizonte.pe");
 
     const responseText = lines.join("\n");
 
@@ -113,7 +125,7 @@ async function handleClinicalHistoryFlow({
     if (typeof auditLogger === "function") {
       await auditLogger({
         phone: from,
-        messageText: text,
+        messageText: rawText,
         messageType: "text",
         route: "staff_intake",
         action: "history_entry_created",
@@ -127,7 +139,7 @@ async function handleClinicalHistoryFlow({
 
     return { ok: true, data: result };
   } catch (err) {
-    console.error("❌ Error en handleClinicalHistoryFlow:", err.message);
+    console.error("❌ Error en handleClinicalHistoryDirect:", err.message);
     if (typeof sendWhatsAppText === "function") {
       await sendWhatsAppText(from, `⚠️ Error guardando consulta en Historia Clínica: ${err.message}`);
     }
@@ -135,99 +147,42 @@ async function handleClinicalHistoryFlow({
   }
 }
 
-async function handlePatientUpdateFlow({
+async function handlePatientUpdateDirect({
   from,
-  text,
+  target,
+  updates,
+  rawText,
   config,
   sendWhatsAppText,
   notifyTelegram,
   auditLogger,
 }) {
   try {
-    const cleanLower = text.toLowerCase();
-    // Detección inteligente: Si es un relato clínico detallado enviado con #actualizar
-    const isClinicalContent =
-      cleanLower.includes("paciente refiere") ||
-      cleanLower.includes("sesión") ||
-      cleanLower.includes("sesion") ||
-      cleanLower.includes("tratamiento") ||
-      cleanLower.includes("terapia") ||
-      cleanLower.includes("conductual");
-
-    const hasDemographicKeywords =
-      cleanLower.includes("dni") ||
-      cleanLower.includes("correo") ||
-      cleanLower.includes("email") ||
-      cleanLower.includes("celular") ||
-      cleanLower.includes("teléfono") ||
-      cleanLower.includes("telefono") ||
-      cleanLower.includes("dirección") ||
-      cleanLower.includes("direccion") ||
-      cleanLower.includes("trabajo");
-
-    if (isClinicalContent && !hasDemographicKeywords) {
-      console.log(`🧠 [INTELIGENCIA CLÍNICA] Redirigiendo reporte clínico a Historia Clínica de ${from}`);
-      return await handleClinicalHistoryFlow({
-        from,
-        text,
-        config,
-        sendWhatsAppText,
-        notifyTelegram,
-        auditLogger,
-      });
-    }
-
-    const parsed = await parsePatientUpdateFromText(text, config);
-
-    if (!parsed.target) {
+    if (!target) {
       const errorMsg =
-        "⚠️ *Falta el identificador del paciente:*\n" +
-        "Por favor indica el ID (ej: 192) o número de celular del paciente que deseas actualizar.\n\n" +
+        "⚠️ *Falta el nombre o ID del paciente a actualizar.*\n\n" +
         "*Ejemplo:*\n" +
-        "`#actualizar 192 DNI: 71234567, Ocupación: Contadora`\n" +
-        "o\n" +
-        "`#actualizar 955443322 vive en Miraflores`";
+        `_"El DNI de Valeria Mendoza es 71234567 y trabaja en BCP"_`;
       if (typeof sendWhatsAppText === "function") {
         await sendWhatsAppText(from, errorMsg);
       }
       return { ok: false, reason: "missing_target" };
     }
 
-    const hasAnyField =
-      parsed.dni ||
-      parsed.fechaNacimiento ||
-      parsed.sexo ||
-      parsed.telefono ||
-      parsed.email ||
-      parsed.direccion ||
-      parsed.trabajo ||
-      parsed.ocupacion ||
-      parsed.estadocivil ||
-      parsed.grado ||
-      parsed.nombre ||
-      parsed.apellidos ||
-      parsed.observaciones;
-
-    if (!hasAnyField) {
-      const errorMsg =
-        `⚠️ *No se detectaron datos nuevos para actualizar en el paciente #${parsed.target}.*\n\n` +
-        "*Ejemplo:*\n" +
-        `\`#actualizar ${parsed.target} DNI: 71234567, Ocupación: Contadora\``;
-      if (typeof sendWhatsAppText === "function") {
-        await sendWhatsAppText(from, errorMsg);
-      }
-      return { ok: false, reason: "no_fields_to_update" };
-    }
-
     const updaterEmail = `whatsapp:${from}`;
-    const updateResult = await updatePatientRow(parsed.target, parsed, updaterEmail, config);
+    const updateResult = await updatePatientRow(target, updates, updaterEmail, config);
 
     if (!updateResult.success) {
       let errorMsg = `⚠️ No se pudo actualizar el paciente: ${updateResult.reason}`;
-      if (updateResult.reason === "not_found") {
+      if (updateResult.reason === "multiple") {
         errorMsg =
-          `⚠️ *No se encontró ningún paciente con el ID o celular:* \`${parsed.target}\`\n` +
-          "Verifica que el número o ID sea correcto.";
+          `⚠️ *Encontré varios pacientes que coinciden con "${target}":*\n` +
+          updateResult.matches.map((m, i) => `${i + 1}) #${m.id}: *${m.nombre}*`).join("\n") +
+          `\n\nPor favor indícame su nombre completo o ID.`;
+      } else if (updateResult.reason === "not_found") {
+        errorMsg =
+          `⚠️ *No se encontró ningún paciente con el nombre o ID:* \`${target}\`\n` +
+          "Verifica el nombre o ID en el sistema web.";
       } else if (updateResult.reason === "archived") {
         errorMsg =
           `⚠️ *El paciente #${updateResult.id} (${updateResult.nombre}) está archivado.*\n` +
@@ -240,9 +195,9 @@ async function handlePatientUpdateFlow({
       return { ok: false, reason: updateResult.reason };
     }
 
-    // Éxito: formatear confirmación a WhatsApp
+    // Confirmación
     const lines = [
-      `✅ *Ficha del paciente #${updateResult.id} (${updateResult.fullName}) actualizada con éxito:*`
+      `✅ *Ficha del paciente #${updateResult.id} (${updateResult.fullName}) actualizada:*`
     ];
     for (const mod of updateResult.modifiedFields) {
       lines.push(`• ${mod.label}: *${mod.value}*`);
@@ -272,7 +227,7 @@ async function handlePatientUpdateFlow({
     if (typeof auditLogger === "function") {
       await auditLogger({
         phone: from,
-        messageText: text,
+        messageText: rawText,
         messageType: "text",
         route: "staff_intake",
         action: "patient_updated",
@@ -286,7 +241,7 @@ async function handlePatientUpdateFlow({
 
     return { ok: true, data: updateResult };
   } catch (err) {
-    console.error("❌ Error en handlePatientUpdateFlow:", err.message);
+    console.error("❌ Error en handlePatientUpdateDirect:", err.message);
     if (typeof sendWhatsAppText === "function") {
       await sendWhatsAppText(from, `⚠️ Error al actualizar ficha: ${err.message}`);
     }
@@ -307,45 +262,51 @@ export async function handleStaffIntakeInbound({
   const stateKey = `staff_intake:${from}`;
   const cleanBody = (text || "").trim().toLowerCase();
 
-  // 1. Comando explícito de cancelación
-  if (cleanBody === "#cancelar" || cleanBody === "/cancelar" || cleanBody === "#anular") {
+  // 1. Comando de cancelación explícita
+  if (
+    cleanBody === "#cancelar" ||
+    cleanBody === "/cancelar" ||
+    cleanBody === "#anular" ||
+    cleanBody === "cancelar" ||
+    cleanBody === "anular"
+  ) {
     await deleteConversationState(stateKey);
     if (typeof sendWhatsAppText === "function") {
       await sendWhatsAppText(
         from,
-        "🗑️ *Registro cancelado.*\nSe ha descartado el borrador actual. Puedes iniciar uno nuevo cuando desees con `#alta`."
+        "🗑️ *Operación cancelada.*\nSe ha descartado cualquier borrador pendiente. Puedes escribirme en cualquier momento para registrar pacientes o historias."
       );
     }
     return { ok: true, cancelled: true };
   }
 
-  // 2. Comando explícito de Historia Clínica / Consulta / Sesión
-  const isClinicalCommand = /^(#|\/)?(historia|consulta|sesion|sesión|evolucion|evolución)\b/i.test(text.trim());
-  if (isClinicalCommand) {
-    return await handleClinicalHistoryFlow({
-      from,
-      text,
-      config: loadConfig(env),
-      sendWhatsAppText,
-      notifyTelegram,
-      auditLogger,
-    });
+  // 2. Saludo o solicitud de menú / ayuda
+  const isHelpOrGreeting =
+    cleanBody === "hola" ||
+    cleanBody === "buenas" ||
+    cleanBody === "buenos dias" ||
+    cleanBody === "buenos días" ||
+    cleanBody === "buenas tardes" ||
+    cleanBody === "buenas noches" ||
+    cleanBody === "menu" ||
+    cleanBody === "menú" ||
+    cleanBody === "ayuda" ||
+    cleanBody === "help" ||
+    cleanBody === "opciones" ||
+    cleanBody === "¿que puedes hacer?" ||
+    cleanBody === "que puedes hacer?";
+
+  if (isHelpOrGreeting) {
+    const helpMsg = buildHelpMenu(from);
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, helpMsg);
+    }
+    return { ok: true, action: "help_menu" };
   }
 
-  // 3. Comando de actualización / modificación de ficha existente
-  const isUpdateCommand = /^(#|\/)?(actualizar|modificar|agregar|update)\b/i.test(text.trim());
-  if (isUpdateCommand) {
-    return await handlePatientUpdateFlow({
-      from,
-      text,
-      config: loadConfig(env),
-      sendWhatsAppText,
-      notifyTelegram,
-      auditLogger,
-    });
-  }
+  const config = loadConfig(env);
 
-  // 2. Revisar si existe un borrador previo no expirado
+  // 3. Revisar si hay un borrador de alta incompleto en curso
   const now = Date.now();
   let existingState = null;
   try {
@@ -355,41 +316,87 @@ export async function handleStaffIntakeInbound({
   }
 
   const existingDraft = existingState?.intakeDraft;
+  const isExplicitClinical = /^(#|\/)?(historia|consulta|sesion|sesión|evolucion|evolución)/i.test(text.trim());
+  const isExplicitUpdate = /^(#|\/)?(actualizar|modificar|agregar|update)/i.test(text.trim());
+
   let combinedText = text;
-
-  const isExplicitNewStart = /^(#|\/)(alta|registro)/i.test(text.trim());
-
   if (
     existingDraft?.text &&
     now - (existingDraft.updatedAt || 0) < DRAFT_TTL_MS &&
-    !isExplicitNewStart
+    !isExplicitClinical &&
+    !isExplicitUpdate
   ) {
     combinedText = `${existingDraft.text}\n${text}`;
     console.log(`🧩 Combinando mensaje con borrador activo de ${from}`);
   }
 
+  // 4. Clasificación inteligente con IA (Gemini Flash)
+  let classified = null;
   try {
-    const config = loadConfig(env);
+    classified = await classifyAndParseStaffMessage(combinedText, config);
+    console.log(`🧠 [INTELIGENCIA STAFF] Intención detectada: ${classified.intent} | Target: ${classified.target || "N/A"}`);
+  } catch (err) {
+    console.warn("⚠️ Falló clasificación general, intentando flujos clásicos:", err.message);
+  }
 
-    // Ejecutamos la extracción y validación
+  // 5. Enrutamiento según intención:
+
+  // CASO A: HISTORIA CLÍNICA / CONSULTA
+  if (classified?.intent === "HISTORIA_CLINICA" || isExplicitClinical) {
+    await deleteConversationState(stateKey); // Limpiar borradores previos
+    const historiaData = classified?.historia || (await parseClinicalHistoryFromText(text, config));
+    return await handleClinicalHistoryDirect({
+      from,
+      target: classified?.target || historiaData.target,
+      historiaData,
+      rawText: text,
+      config,
+      sendWhatsAppText,
+      notifyTelegram,
+      auditLogger,
+    });
+  }
+
+  // CASO B: ACTUALIZAR DATOS PERSONALES
+  if (classified?.intent === "ACTUALIZAR_DATOS" || isExplicitUpdate) {
+    await deleteConversationState(stateKey);
+    const updates = classified?.actualizacion || (await parsePatientUpdateFromText(text, config));
+    return await handlePatientUpdateDirect({
+      from,
+      target: classified?.target || updates.target,
+      updates,
+      rawText: text,
+      config,
+      sendWhatsAppText,
+      notifyTelegram,
+      auditLogger,
+    });
+  }
+
+  // CASO C: SALUDO O MENÚ DETECTADO POR IA
+  if (classified?.intent === "AYUDA_O_SALUDO") {
+    const helpMsg = buildHelpMenu(from);
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, helpMsg);
+    }
+    return { ok: true, action: "help_menu" };
+  }
+
+  // CASO D: NUEVO PACIENTE (INTAKE / ALTA)
+  try {
     const intakeResult = await processPatientIntake({
       text: combinedText,
-      from: null, // Evita envío duplicado interno en el orquestador
+      from: null,
       senderName: "Staff Feliz Horizonte",
       config,
     });
 
-    // 3. Caso A: Registro Exitoso
     if (intakeResult.success) {
-      // Limpiamos el borrador completado
       await deleteConversationState(stateKey);
-
       const responseText = intakeResult.responseText || "✅ Paciente registrado con éxito.";
-
       if (typeof sendWhatsAppText === "function") {
         await sendWhatsAppText(from, responseText);
       }
-
       if (typeof notifyTelegram === "function") {
         const p = intakeResult.patient || {};
         await notifyTelegram(
@@ -404,7 +411,6 @@ export async function handleStaffIntakeInbound({
           from
         );
       }
-
       if (typeof auditLogger === "function") {
         await auditLogger({
           phone: from,
@@ -419,13 +425,27 @@ export async function handleStaffIntakeInbound({
           },
         });
       }
-
       return { ok: true, data: intakeResult };
     }
 
-    // 4. Caso B: Faltan datos obligatorios (Validación incompleta)
     if (intakeResult.reason === "validation_failed") {
-      // Guardamos lo acumulado en memoria para que el siguiente mensaje lo complete
+      // Si el texto era un mensaje suelto no clínico y no dio para alta, guiamos al usuario
+      const p = intakeResult.patient || {};
+      const recopilado = [];
+      const fullName = `${p.nombre || ""} ${p.apellidos || ""}`.trim();
+      if (fullName) recopilado.push(`• Nombre: *${fullName}*`);
+      if (p.telefono) recopilado.push(`• Celular: *${p.telefono}*`);
+      if (p.email) recopilado.push(`• Email: *${p.email}*`);
+
+      // Si no capturó ni nombre ni celular ni correo, es probable que fuera un mensaje suelto
+      if (recopilado.length === 0) {
+        const helpMsg = buildHelpMenu(from);
+        if (typeof sendWhatsAppText === "function") {
+          await sendWhatsAppText(from, helpMsg);
+        }
+        return { ok: true, action: "help_menu" };
+      }
+
       await mergeConversationState(stateKey, {
         intakeDraft: {
           text: combinedText,
@@ -434,23 +454,10 @@ export async function handleStaffIntakeInbound({
         },
       });
 
-      const p = intakeResult.patient || {};
-      const recopilado = [];
-      const fullName = `${p.nombre || ""} ${p.apellidos || ""}`.trim();
-      if (fullName) recopilado.push(`• Nombre: *${fullName}*`);
-      if (p.telefono) recopilado.push(`• Celular: *${p.telefono}*`);
-      if (p.email) recopilado.push(`• Email: *${p.email}*`);
-      if (p.fechaNacimiento) recopilado.push(`• F. Nac: *${p.fechaNacimiento}*`);
-
-      let guidanceMsg = `📝 *Anoté los siguientes datos:*`;
-      if (recopilado.length > 0) {
-        guidanceMsg += `\n${recopilado.join("\n")}`;
-      } else {
-        guidanceMsg += `\n_(Aún no identifico el nombre del paciente)_`;
-      }
-
+      let guidanceMsg = `📝 *Anoté los siguientes datos del paciente:*`;
+      guidanceMsg += `\n${recopilado.join("\n")}`;
       guidanceMsg += `\n\n⚠️ *Falta para completar el alta:*\n- ${intakeResult.errors.join("\n- ")}`;
-      guidanceMsg += `\n\n💬 _Envía los datos faltantes en tu próximo mensaje (o escribe #cancelar para anular)._`;
+      guidanceMsg += `\n\n💬 _Envía los datos faltantes en tu próximo mensaje (o escribe cancelar para anular)._`;
 
       if (typeof sendWhatsAppText === "function") {
         await sendWhatsAppText(from, guidanceMsg);
@@ -459,18 +466,15 @@ export async function handleStaffIntakeInbound({
       return { ok: false, incomplete: true, missing: intakeResult.errors };
     }
 
-    // Otros errores
     return { ok: false, error: intakeResult.reason };
   } catch (err) {
     console.error("❌ Error en handleStaffIntakeInbound:", err.message);
-
     if (typeof sendWhatsAppText === "function") {
       await sendWhatsAppText(
         from,
-        `⚠️ Error procesando datos: ${err.message}. Escribe #cancelar si deseas reiniciar.`
+        `⚠️ No pude interpretar la instrucción: ${err.message}. Escribe "menu" para ver opciones.`
       );
     }
-
     return { ok: false, error: err.message };
   }
 }

@@ -253,81 +253,130 @@ export async function insertPatientRow(patient, creatorEmail, config) {
   };
 }
 
-export async function updatePatientRow(target, updates, updaterEmail, config) {
-  const token = await getAccessToken(config);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:X`;
+export function stripAccents(str) {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
 
-  const res = await fetch(url, {
+export async function findPatient(target, config) {
+  if (!target || !String(target).trim()) {
+    return { found: false, reason: 'empty_target' };
+  }
+
+  const token = await getAccessToken(config);
+  const pacUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:X`;
+  const pacRes = await fetch(pacUrl, {
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!res.ok) {
-    throw new Error(`Error consultando Pacientes: ${res.statusText}`);
+  if (!pacRes.ok) {
+    throw new Error(`Error consultando Pacientes: ${pacRes.statusText}`);
+  }
+  const pacData = await pacRes.json();
+  const pacRows = pacData.values || [];
+
+  const cleanTarget = String(target).trim();
+  const cleanTargetNorm = stripAccents(cleanTarget);
+  const digits = cleanTarget.replace(/\D/g, '');
+
+  // 1. Coincidencia por ID exacto (si target es puramente numérico hasta 5 dígitos)
+  if (/^\d{1,5}$/.test(cleanTarget)) {
+    const idx = pacRows.findIndex(r => String(r[0] || '').trim() === cleanTarget);
+    if (idx !== -1) {
+      const row = pacRows[idx];
+      return {
+        found: true,
+        patient: {
+          id: String(row[0]),
+          nombre: `${row[1] || ''} ${row[2] || ''}`.trim(),
+          estado: (row[18] || '').trim().toUpperCase(),
+          rowIndex: idx + 2,
+          row
+        }
+      };
+    }
   }
 
-  const data = await res.json();
-  const rows = data.values || [];
-
-  const cleanTarget = String(target || '').trim();
-  const cleanTargetDigits = cleanTarget.replace(/\D/g, '');
-
-  let matchedIndex = -1;
-  let matchedRow = null;
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const rowId = String(row[0] || '').trim();
-    const rowPhone = String(row[6] || '').replace(/\D/g, '');
-    const rowNombre = `${row[1] || ''} ${row[2] || ''}`.trim();
-
-    // 1. Coincidencia por ID exacto
-    if (cleanTarget === rowId) {
-      matchedIndex = i;
-      matchedRow = row;
-      break;
+  // 2. Coincidencia por celular (si tiene 8 o más dígitos)
+  if (digits.length >= 8) {
+    const idx = pacRows.findIndex(r => {
+      const pPhone = String(r[6] || '').replace(/\D/g, '');
+      return pPhone && (pPhone === digits || pPhone.endsWith(digits) || digits.endsWith(pPhone));
+    });
+    if (idx !== -1) {
+      const row = pacRows[idx];
+      return {
+        found: true,
+        patient: {
+          id: String(row[0]),
+          nombre: `${row[1] || ''} ${row[2] || ''}`.trim(),
+          estado: (row[18] || '').trim().toUpperCase(),
+          rowIndex: idx + 2,
+          row
+        }
+      };
     }
+  }
 
-    // 2. Coincidencia por celular
-    if (cleanTargetDigits.length >= 8 && rowPhone && (rowPhone === cleanTargetDigits || rowPhone.endsWith(cleanTargetDigits) || cleanTargetDigits.endsWith(rowPhone))) {
-      matchedIndex = i;
-      matchedRow = row;
-      break;
-    }
-
-    // 3. Coincidencia por nombre (mínimo 4 caracteres y no numérico)
-    if (cleanTarget.length >= 4 && isNaN(Number(cleanTarget))) {
-      if (rowNombre.toLowerCase().includes(cleanTarget.toLowerCase())) {
-        matchedIndex = i;
-        matchedRow = row;
-        break;
+  // 3. Coincidencia por palabras del nombre del paciente
+  const words = cleanTargetNorm.split(/\s+/).filter(w => w.length > 2);
+  if (words.length > 0) {
+    const matches = [];
+    for (let i = 0; i < pacRows.length; i++) {
+      const row = pacRows[i];
+      const fullNameNorm = stripAccents(`${row[1] || ''} ${row[2] || ''}`);
+      if (words.every(w => fullNameNorm.includes(w))) {
+        matches.push({
+          id: String(row[0]),
+          nombre: `${row[1] || ''} ${row[2] || ''}`.trim(),
+          estado: (row[18] || '').trim().toUpperCase(),
+          rowIndex: i + 2,
+          row
+        });
       }
     }
+
+    if (matches.length === 1) {
+      return { found: true, patient: matches[0] };
+    }
+    if (matches.length > 1) {
+      return {
+        found: false,
+        reason: 'multiple',
+        matches: matches.map(m => ({ id: m.id, nombre: m.nombre }))
+      };
+    }
   }
 
-  if (matchedIndex === -1 || !matchedRow) {
+  return { found: false, reason: 'not_found', target: cleanTarget };
+}
+
+export async function updatePatientRow(target, updates, updaterEmail, config) {
+  const findRes = await findPatient(target, config);
+  if (!findRes.found) {
     return {
       success: false,
-      reason: 'not_found',
-      target: cleanTarget
+      reason: findRes.reason,
+      target: target,
+      matches: findRes.matches
     };
   }
 
-  const patientId = matchedRow[0];
-  const patientNombre = `${matchedRow[1] || ''} ${matchedRow[2] || ''}`.trim();
-  const rowEstado = (matchedRow[18] || '').trim().toUpperCase();
-
-  if (rowEstado === 'ARCHIVADO') {
+  const patient = findRes.patient;
+  if (patient.estado === 'ARCHIVADO') {
     return {
       success: false,
       reason: 'archived',
-      id: patientId,
-      nombre: patientNombre
+      id: patient.id,
+      nombre: patient.nombre
     };
   }
 
-  const sheetRowNumber = matchedIndex + 2; // Fila 1 es header, índice 0 es fila 2
-  const updatedRow = [...matchedRow];
+  const sheetRowNumber = patient.rowIndex;
+  const updatedRow = [...patient.row];
 
-  // Asegurar que updatedRow tenga al menos 24 columnas (A hasta X)
   while (updatedRow.length < 24) {
     updatedRow.push('');
   }
@@ -389,10 +438,10 @@ export async function updatePatientRow(target, updates, updaterEmail, config) {
   }
 
   const nowPeru = formatPeruDate();
-  updatedRow[20] = nowPeru; // ACTUALIZADO_EN
-  updatedRow[21] = updaterEmail || 'whatsapp-bot'; // ACTUALIZADO_POR
+  updatedRow[20] = nowPeru;
+  updatedRow[21] = updaterEmail || 'whatsapp-bot';
 
-  // Enviar fila actualizada a Google Sheets
+  const token = await getAccessToken(config);
   const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A${sheetRowNumber}:X${sheetRowNumber}?valueInputOption=USER_ENTERED`;
 
   const updateRes = await fetch(updateUrl, {
@@ -411,7 +460,6 @@ export async function updatePatientRow(target, updates, updaterEmail, config) {
     throw new Error(`Error actualizando fila en Google Sheets: ${errText}`);
   }
 
-  // Registrar auditoría en pestaña Auditoria si existe
   try {
     const auditUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Auditoria!A1:append?valueInputOption=USER_ENTERED`;
     await fetch(auditUrl, {
@@ -425,7 +473,7 @@ export async function updatePatientRow(target, updates, updaterEmail, config) {
           nowPeru,
           'ACTUALIZAR',
           'PACIENTE',
-          String(patientId),
+          String(patient.id),
           JSON.stringify({
             origen: 'whatsapp_intake_update',
             actualizadoPor: updaterEmail,
@@ -440,61 +488,35 @@ export async function updatePatientRow(target, updates, updaterEmail, config) {
 
   return {
     success: true,
-    id: patientId,
-    fullName: `${updatedRow[1]} ${updatedRow[2]}`.trim() || patientNombre,
+    id: patient.id,
+    fullName: `${updatedRow[1]} ${updatedRow[2]}`.trim() || patient.nombre,
     modifiedFields
   };
 }
 
 export async function insertClinicalHistoryRow({ target, historyData, senderPhone, config }) {
+  const findRes = await findPatient(target, config);
+  if (!findRes.found) {
+    return {
+      success: false,
+      reason: findRes.reason,
+      target: target,
+      matches: findRes.matches
+    };
+  }
+
+  const patient = findRes.patient;
+  if (patient.estado === 'ARCHIVADO') {
+    return {
+      success: false,
+      reason: 'archived',
+      id: patient.id,
+      nombre: patient.nombre
+    };
+  }
+
   const token = await getAccessToken(config);
 
-  // 1. Validar que el paciente exista en Pacientes
-  const pacUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:X`;
-  const pacRes = await fetch(pacUrl, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  if (!pacRes.ok) {
-    throw new Error(`Error consultando Pacientes: ${pacRes.statusText}`);
-  }
-  const pacData = await pacRes.json();
-  const pacRows = pacData.values || [];
-
-  const cleanTarget = String(target || '').trim();
-  const cleanTargetDigits = cleanTarget.replace(/\D/g, '');
-
-  let matchedPatient = null;
-  for (let i = 0; i < pacRows.length; i++) {
-    const row = pacRows[i];
-    const rowId = String(row[0] || '').trim();
-    const rowPhone = String(row[6] || '').replace(/\D/g, '');
-    const rowNombre = `${row[1] || ''} ${row[2] || ''}`.trim();
-
-    if (cleanTarget === rowId) {
-      matchedPatient = { id: rowId, nombre: rowNombre, estado: row[18] };
-      break;
-    }
-    if (cleanTargetDigits.length >= 8 && rowPhone && (rowPhone === cleanTargetDigits || rowPhone.endsWith(cleanTargetDigits) || cleanTargetDigits.endsWith(rowPhone))) {
-      matchedPatient = { id: rowId, nombre: rowNombre, estado: row[18] };
-      break;
-    }
-    if (cleanTarget.length >= 4 && isNaN(Number(cleanTarget))) {
-      if (rowNombre.toLowerCase().includes(cleanTarget.toLowerCase())) {
-        matchedPatient = { id: rowId, nombre: rowNombre, estado: row[18] };
-        break;
-      }
-    }
-  }
-
-  if (!matchedPatient) {
-    return { success: false, reason: 'not_found', target: cleanTarget };
-  }
-
-  if (String(matchedPatient.estado || '').trim().toUpperCase() === 'ARCHIVADO') {
-    return { success: false, reason: 'archived', id: matchedPatient.id, nombre: matchedPatient.nombre };
-  }
-
-  // 2. Obtener siguiente ID en Historia
   const histIdUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Historia!A:A`;
   const histIdRes = await fetch(histIdUrl, {
     headers: { Authorization: `Bearer ${token}` }
@@ -511,7 +533,6 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
   }
   const nextHistoryId = maxId + 1;
 
-  // 3. Determinar el médico o psicólogo tratante
   let medico = historyData.medico || '';
   if (!medico) {
     const cleanSender = String(senderPhone || '').replace(/\D/g, '');
@@ -527,11 +548,9 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
   const nowPeru = formatPeruDate();
   const fechaConsulta = historyData.fecha || nowPeru;
 
-  // Estructura de Historia en Consultorio:
-  // 1:ID, 2:ID_PACIENTE, 3:FECHA, 4:MOTIVO, 5:SINTOMAS, 6:DIAGNOSTICO, 7:TRATAMIENTO, 8:OBSERVACIONES, 9:MEDICO, 10:SIGNOS, 11:ESTADO
   const newRow = [
     String(nextHistoryId),
-    String(matchedPatient.id),
+    String(patient.id),
     fechaConsulta,
     historyData.motivo || '',
     historyData.sintomas || '',
@@ -558,7 +577,6 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
     throw new Error(`Error insertando fila en Historia: ${errText}`);
   }
 
-  // Registrar en Auditoria
   try {
     const auditUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Auditoria!A1:append?valueInputOption=USER_ENTERED`;
     await fetch(auditUrl, {
@@ -575,8 +593,8 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
           String(nextHistoryId),
           JSON.stringify({
             origen: 'whatsapp_clinical_history',
-            pacienteId: matchedPatient.id,
-            pacienteNombre: matchedPatient.nombre,
+            pacienteId: patient.id,
+            pacienteNombre: patient.nombre,
             medico: medico,
             creadoPor: `whatsapp:${senderPhone}`
           })
@@ -590,8 +608,8 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
   return {
     success: true,
     historyId: nextHistoryId,
-    patientId: matchedPatient.id,
-    patientName: matchedPatient.nombre,
+    patientId: patient.id,
+    patientName: patient.nombre,
     fecha: fechaConsulta,
     medico: medico,
     motivo: historyData.motivo,

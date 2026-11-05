@@ -204,3 +204,93 @@ export async function parseClinicalHistoryFromText(text, config) {
     medico: parsed.medico ? String(parsed.medico).trim() : null
   };
 }
+
+const SYSTEM_INSTRUCTION_STAFF_ASSISTANT = `Eres la Asistente Clínica y Secretaria Ejecutiva de Inteligencia Artificial del Centro Psicológico y Psiquiátrico 'Feliz Horizonte'.
+Tu usuario es el personal médico autorizado (psicólogos, directores).
+Tu misión es interpretar CUALQUIER mensaje en lenguaje natural enviado por el personal y extraer la acción e información estructurada con máxima fidelidad.
+
+Debes responder ÚNICAMENTE con un objeto JSON con los siguientes campos:
+
+- "intent": Uno de los siguientes valores exactos:
+  * "HISTORIA_CLINICA": Si el mensaje describe o relata una sesión de terapia, consulta psicológica/médica, evolución de paciente, lo que refirió en consulta, síntomas trabajados, técnicas o intervenciones aplicadas (ej: TREC, activación conductual, relajación), tareas dejadas o notas clínicas.
+  * "ACTUALIZAR_DATOS": Si el mensaje pide actualizar, agregar o modificar datos de contacto o personales de un paciente existente (DNI, trabajo/ocupación, correo, dirección, teléfono nuevo, estado civil, grado de instrucción).
+  * "NUEVO_PACIENTE": Si el mensaje contiene datos de contacto para dar de alta a un NUEVO paciente (nombres, apellidos, celular, correo, fecha de nacimiento) o un mensaje/chat reenviado de admisión.
+  * "AYUDA_O_SALUDO": Si el mensaje es un saludo (hola, buenos días, etc.), una consulta general sobre qué puede hacer, o pide el menú/ayuda.
+
+- "target": Nombre, ID o celular del paciente referido en el mensaje (ej: "Kevin Vásquez", "Kevin", "188", "960492045", "Valeria Mendoza"). Si es un alta de paciente nuevo o no se identifica, null.
+
+- "historia": Si el intent es "HISTORIA_CLINICA", objeto con:
+  * "motivo": Resumen claro de lo que refiere el paciente o motivo de la sesión.
+  * "sintomas": Síntomas descritos u observados (ej: impulsos voyeristas, ansiedad, baja tolerancia).
+  * "diagnostico": Diagnóstico presuntivo o conclusión clínica si se menciona; si no, cadena vacía.
+  * "tratamiento": Técnicas aplicadas en la sesión (ej: TREC, coste-beneficio), tareas asignadas o plan terapéutico.
+  * "observaciones": Examen mental, historia familiar relevante, creencias irracionales o notas del terapeuta.
+  * "signos": Signos psicopatológicos o de conducta observados si se desprenden; si no, cadena vacía.
+  * "medico": Nombre del médico si se menciona explícitamente; si no, null.
+  (Si el intent no es HISTORIA_CLINICA, null).
+
+- "actualizacion": Si el intent es "ACTUALIZAR_DATOS", objeto con los campos a modificar (dni, telefono, email, direccion, trabajo, ocupacion, estadocivil, grado, nombre, apellidos, observaciones). Los que no se mencionen déjalos en null.
+  (Si el intent no es ACTUALIZAR_DATOS, null).`;
+
+export async function classifyAndParseStaffMessage(text, config) {
+  if (!text || !text.trim()) {
+    throw new Error('Texto de entrada vacío');
+  }
+
+  const rawJson = await callGeminiGenerate({
+    prompt: text,
+    systemInstruction: SYSTEM_INSTRUCTION_STAFF_ASSISTANT,
+    config
+  });
+
+  const parsed = JSON.parse(rawJson);
+
+  let target = parsed.target ? String(parsed.target).trim() : null;
+  if (!target) {
+    const m = text.match(/(?:#|\/)?(?:historia|consulta|sesion|sesión|evolucion|evolución|actualizar|modificar|agregar)\s+([A-Za-z0-9ÁÉÍÓÚáéíóúñÑ\s]{2,30})/i);
+    if (m) target = m[1].trim();
+  }
+
+  const res = {
+    intent: parsed.intent || 'AYUDA_O_SALUDO',
+    target: target,
+    historia: null,
+    actualizacion: null
+  };
+
+  if (parsed.intent === 'HISTORIA_CLINICA' && parsed.historia) {
+    res.historia = {
+      target: target,
+      fecha: parsed.historia.fecha ? String(parsed.historia.fecha).trim() : null,
+      motivo: parsed.historia.motivo ? String(parsed.historia.motivo).trim() : '',
+      sintomas: parsed.historia.sintomas ? String(parsed.historia.sintomas).trim() : '',
+      diagnostico: parsed.historia.diagnostico ? String(parsed.historia.diagnostico).trim() : '',
+      tratamiento: parsed.historia.tratamiento ? String(parsed.historia.tratamiento).trim() : '',
+      observaciones: parsed.historia.observaciones ? String(parsed.historia.observaciones).trim() : '',
+      signos: parsed.historia.signos ? String(parsed.historia.signos).trim() : '',
+      medico: parsed.historia.medico ? String(parsed.historia.medico).trim() : null
+    };
+  }
+
+  if (parsed.intent === 'ACTUALIZAR_DATOS' && parsed.actualizacion) {
+    const a = parsed.actualizacion;
+    res.actualizacion = {
+      target: target,
+      nombre: a.nombre ? capitalizeWords(a.nombre) : null,
+      apellidos: a.apellidos ? capitalizeWords(a.apellidos) : null,
+      dni: a.dni ? String(a.dni).replace(/\D/g, '') : null,
+      fechaNacimiento: a.fechaNacimiento ? normalizeDate(a.fechaNacimiento) : null,
+      sexo: a.sexo ? String(a.sexo).toUpperCase() : null,
+      telefono: a.telefono ? normalizePhone(a.telefono) : null,
+      email: a.email ? normalizeEmail(a.email) : null,
+      direccion: a.direccion ? String(a.direccion).trim() : null,
+      trabajo: a.trabajo ? String(a.trabajo).trim() : null,
+      ocupacion: a.ocupacion ? String(a.ocupacion).trim() : null,
+      estadocivil: a.estadocivil ? String(a.estadocivil).trim() : null,
+      grado: a.grado ? String(a.grado).trim() : null,
+      observaciones: a.observaciones ? String(a.observaciones).trim() : null
+    };
+  }
+
+  return res;
+}
