@@ -34,23 +34,9 @@ export async function processPatientIntake({ text, from, senderName, config }) {
   // 4. Preparar respuesta a WhatsApp
   let responseText = '';
   if (result.alreadyExisted) {
-    responseText = `ℹ️ *El paciente ya se encuentra registrado:*\n` +
-      `• Nombre: *${result.existingNombre}*\n` +
-      `• ID en sistema: *#${result.existingId}*\n` +
-      `• Coincidencia por: ${result.motivo === 'celular_coincidente' ? 'Celular' : 'Email'}\n\n` +
-      `💡 *Para actualizar o agregar datos a su ficha:*\n` +
-      `\`#actualizar ${result.existingId} [nuevos datos]\``;
+    responseText = `ℹ️ Paciente ya registrado: *${result.existingNombre}* (#${result.existingId}).`;
   } else {
-    responseText = `✅ *Paciente registrado(a) con éxito en Feliz Horizonte:*\n\n` +
-      `• ID: *#${result.id}*\n` +
-      `• Nombre: *${result.fullName}*\n` +
-      `• Celular: *${patient.telefono || 'No especificado'}*\n` +
-      `• F. Nac: *${patient.fechaNacimiento || 'No especificada'}*\n` +
-      `• Email: *${patient.email || 'No especificado'}*\n` +
-      `• Ocupación: *${patient.trabajo || 'No especificada'}*\n` +
-      (result.gclidAsignado ? `• Google Ads: *Enlazado con éxito (GCLID)*\n` : '') +
-      (validation.warnings.length > 0 ? `\n⚠️ *Notas:* ${validation.warnings.join('; ')}\n` : '') +
-      `\n🔗 Ficha disponible en: https://app.felizhorizonte.pe`;
+    responseText = `✅ Paciente *${result.fullName}* registrado (#${result.id}).`;
   }
 
   // 5. Enviar mensaje de confirmación por WhatsApp si hay remitente

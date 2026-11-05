@@ -415,47 +415,6 @@ async function sendWhatsAppButtons(to) {
   console.log(`✅ Botones enviados a ${to}`);
 }
 
-async function safeSendWhatsAppStaffButtons(to, bodyText, buttons, footerText = "") {
-  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    console.log(`📱 [SIMULADO] Botones WhatsApp → ${to}: ${bodyText}`);
-    return;
-  }
-
-  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-  try {
-    const interactivePayload = {
-      type: "button",
-      body: { text: bodyText },
-      action: {
-        buttons: buttons.slice(0, 3).map((b) => ({
-          type: "reply",
-          reply: { id: b.id, title: b.title.slice(0, 20) },
-        })),
-      },
-    };
-
-    if (footerText) {
-      interactivePayload.footer = { text: footerText.slice(0, 60) };
-    }
-
-    await axios.post(
-      url,
-      {
-        messaging_product: "whatsapp",
-        to,
-        type: "interactive",
-        interactive: interactivePayload,
-      },
-      { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
-    );
-    console.log(`✅ Botones interactivos de staff enviados a ${to}`);
-  } catch (err) {
-    console.warn("⚠️ Falló envío de botones interactivos WhatsApp, enviando texto plano:", err.message);
-    const buttonListText = buttons.map((b, i) => `${i + 1}️⃣ ${b.title}`).join("\n");
-    await sendWhatsAppText(to, `${bodyText}\n\n${buttonListText}`);
-  }
-}
-
 function guessFilenameFromMime(mediaId, mimeType, fallbackPrefix = "file") {
   const safeId = mediaId || Date.now();
   const extension = (mimeType?.split("/")[1] || "bin").split(";")[0];
@@ -2111,8 +2070,6 @@ app.post("/webhook/whatsapp", async (req, res) => {
         text,
         buttonSelection,
         env: process.env,
-        sendWhatsAppText,
-        sendWhatsAppButtons: safeSendWhatsAppStaffButtons,
         notifyTelegram,
         auditLogger: (payload) => safeLogInboundAudit(getReminderConfigForAudit(), payload),
       });
