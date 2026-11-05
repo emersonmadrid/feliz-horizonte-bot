@@ -23,12 +23,15 @@ export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
 
   if (!isStaff) return false;
 
-  const cleanBody = text.toLowerCase();
+  const cleanBody = text.toLowerCase().trim();
   if (
     cleanBody.startsWith("#alta") ||
     cleanBody.startsWith("#registro") ||
     cleanBody.startsWith("/alta") ||
-    cleanBody.startsWith("/registro")
+    cleanBody.startsWith("/registro") ||
+    cleanBody.startsWith("#cancelar") ||
+    cleanBody.startsWith("/cancelar") ||
+    cleanBody.startsWith("#anular")
   ) {
     return true;
   }
@@ -57,11 +60,11 @@ export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
     return true;
   }
 
-  // 4. Reenvío directo de mensaje del paciente con email y teléfono
+  // 4. Datos de contacto enviados por staff (email o celular peruano)
   const hasEmail = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text);
   const hasPhone = /\b9\d{8}\b/.test(text) || /\b\d{9}\b/.test(text);
 
-  if (hasEmail && hasPhone) {
+  if (hasEmail || hasPhone) {
     return true;
   }
 
