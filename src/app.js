@@ -2060,6 +2060,14 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     let incomingTelegramLine = summarizeInboundMessage({ text, type: msg.type });
 
+    // Interceptor Prioritario de Admisión de Pacientes (Microservicio feliz-horizonte-intake)
+    // Solo aplica para la psicóloga o staff autorizado con #alta o plantilla de paciente
+    if (isIntakeMessage({ text, from, env: process.env })) {
+      console.log(`📋 Detectado mensaje de admisión de paciente autorizado desde ${from}`);
+      await forwardToIntakeService({ text, from, env: process.env });
+      return res.sendStatus(200);
+    }
+
     if (shouldUseReminderOnlyHandler(process.env)) {
       console.log(`ℹ️ Modo "Solo Recordatorios" activo. Redirigiendo a ${from}`);
       await handleReminderOnlyInbound({
@@ -2155,13 +2163,6 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const logPrefix = audioTranscriptionInfo ? "🎤 (audio)" : "💬";
     console.log(`${logPrefix} WhatsApp de ${from}: "${text}"`);
     incomingTelegramLine = `${audioTranscriptionInfo ? "🎤" : "💬"} "${text || '(sin texto)'}"`;
-
-    // Interceptor de Admisión de Pacientes (Microservicio feliz-horizonte-intake)
-    if (isIntakeMessage({ text, from, env: process.env })) {
-      console.log(`📋 Detectado mensaje de admisión de paciente desde ${from}`);
-      await forwardToIntakeService({ text, from, env: process.env });
-      return res.sendStatus(200);
-    }
 
     await ensureTopicForPhone(from);
 
