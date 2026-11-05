@@ -30,6 +30,16 @@ function buildHelpMenu() {
   );
 }
 
+function extractPatientTarget(text) {
+  if (!text) return null;
+  const clean = text
+    .trim()
+    .replace(/^(es de|para|del paciente|el paciente es|es para|de|paciente)\s+/i, "")
+    .replace(/^#/, "")
+    .trim();
+  return clean || null;
+}
+
 async function replyText(to, text, config, overrideFn) {
   if (typeof overrideFn === "function") {
     return await overrideFn(to, text);
@@ -53,11 +63,21 @@ async function handleClinicalHistoryDirect({
   sendText,
   notifyTelegram,
   auditLogger,
+  stateKey,
 }) {
   try {
     if (!target) {
-      await sendText(from, "⚠️ Indica el paciente y las notas de la sesión.");
-      return { ok: false, reason: "missing_target" };
+      if (stateKey) {
+        await mergeConversationState(stateKey, {
+          pendingClinical: {
+            historiaData,
+            rawText,
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      await sendText(from, "¿De qué paciente es esta sesión?");
+      return { ok: false, reason: "missing_target", pendingTarget: true };
     }
 
     const result = await insertClinicalHistoryRow({
@@ -74,13 +94,18 @@ async function handleClinicalHistoryDirect({
           `⚠️ Hay varios pacientes con "${target}". Indica el ID o nombre completo:\n` +
           result.matches.map((m) => `• #${m.id} ${m.nombre}`).join("\n");
       } else if (result.reason === "not_found") {
-        errorMsg = `⚠️ No encontré al paciente "${target}".`;
+        errorMsg = `⚠️ No encontré al paciente "${target}". ¿Cuál es su nombre o ID?`;
       } else if (result.reason === "archived") {
         errorMsg = `⚠️ El paciente #${result.id} (${result.nombre}) está archivado.`;
+        if (stateKey) await deleteConversationState(stateKey);
       }
 
       await sendText(from, errorMsg);
       return { ok: false, reason: result.reason };
+    }
+
+    if (stateKey) {
+      await deleteConversationState(stateKey);
     }
 
     // Confirmación concisa y directa
@@ -133,11 +158,21 @@ async function handlePatientUpdateDirect({
   sendText,
   notifyTelegram,
   auditLogger,
+  stateKey,
 }) {
   try {
     if (!target) {
-      await sendText(from, "⚠️ Indica el paciente y el dato a modificar.");
-      return { ok: false, reason: "missing_target" };
+      if (stateKey) {
+        await mergeConversationState(stateKey, {
+          pendingUpdate: {
+            updates,
+            rawText,
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      await sendText(from, "¿De qué paciente deseas actualizar estos datos?");
+      return { ok: false, reason: "missing_target", pendingTarget: true };
     }
 
     const updaterEmail = `whatsapp:${from}`;
@@ -150,13 +185,18 @@ async function handlePatientUpdateDirect({
           `⚠️ Hay varios pacientes con "${target}". Indica el ID o nombre completo:\n` +
           updateResult.matches.map((m) => `• #${m.id} ${m.nombre}`).join("\n");
       } else if (updateResult.reason === "not_found") {
-        errorMsg = `⚠️ No encontré al paciente "${target}".`;
+        errorMsg = `⚠️ No encontré al paciente "${target}". ¿Cuál es su nombre o ID?`;
       } else if (updateResult.reason === "archived") {
         errorMsg = `⚠️ El paciente #${updateResult.id} (${updateResult.nombre}) está archivado.`;
+        if (stateKey) await deleteConversationState(stateKey);
       }
 
       await sendText(from, errorMsg);
       return { ok: false, reason: updateResult.reason };
+    }
+
+    if (stateKey) {
+      await deleteConversationState(stateKey);
     }
 
     // Confirmación concisa y directa
@@ -293,7 +333,7 @@ export async function handleStaffIntakeInbound({
     return { ok: true, action: "help_menu" };
   }
 
-  // 4. Revisar borrador en curso
+  // 4. Revisar estado activo (borrador de alta o sesión/actualización pendiente de paciente)
   const now = Date.now();
   let existingState = null;
   try {
@@ -302,6 +342,59 @@ export async function handleStaffIntakeInbound({
     console.warn("⚠️ No se pudo consultar borrador en state service:", err.message);
   }
 
+  // 4.1. Si había una sesión clínica dictada esperando el nombre del paciente:
+  if (
+    existingState?.pendingClinical &&
+    now - (existingState.pendingClinical.updatedAt || 0) < DRAFT_TTL_MS &&
+    !isHelpOrGreeting &&
+    !cleanBody.startsWith("#") &&
+    !buttonSelection
+  ) {
+    const candidateTarget = extractPatientTarget(text);
+    if (candidateTarget) {
+      console.log(`🔗 Asociando sesión previa al paciente: "${candidateTarget}"`);
+      const { historiaData, rawText: originalText } = existingState.pendingClinical;
+      return await handleClinicalHistoryDirect({
+        from,
+        target: candidateTarget,
+        historiaData,
+        rawText: `${originalText}\n(Paciente: ${candidateTarget})`,
+        config,
+        sendText,
+        notifyTelegram,
+        auditLogger,
+        stateKey,
+      });
+    }
+  }
+
+  // 4.2. Si había una actualización pendiente esperando el nombre del paciente:
+  if (
+    existingState?.pendingUpdate &&
+    now - (existingState.pendingUpdate.updatedAt || 0) < DRAFT_TTL_MS &&
+    !isHelpOrGreeting &&
+    !cleanBody.startsWith("#") &&
+    !buttonSelection
+  ) {
+    const candidateTarget = extractPatientTarget(text);
+    if (candidateTarget) {
+      console.log(`🔗 Asociando actualización previa al paciente: "${candidateTarget}"`);
+      const { updates, rawText: originalText } = existingState.pendingUpdate;
+      return await handlePatientUpdateDirect({
+        from,
+        target: candidateTarget,
+        updates,
+        rawText: `${originalText}\n(Paciente: ${candidateTarget})`,
+        config,
+        sendText,
+        notifyTelegram,
+        auditLogger,
+        stateKey,
+      });
+    }
+  }
+
+  // 4.3. Si había un borrador de alta acumulativa en curso
   const existingDraft = existingState?.intakeDraft;
   const isExplicitClinical = /^(#|\/)?(historia|consulta|sesion|sesión|evolucion|evolución)/i.test(text.trim());
   const isExplicitUpdate = /^(#|\/)?(actualizar|modificar|agregar|update)/i.test(text.trim());
@@ -329,7 +422,6 @@ export async function handleStaffIntakeInbound({
 
   // CASO A: HISTORIA CLÍNICA / CONSULTA
   if (classified?.intent === "HISTORIA_CLINICA" || isExplicitClinical) {
-    await deleteConversationState(stateKey);
     const historiaData = classified?.historia || (await parseClinicalHistoryFromText(text, config));
     return await handleClinicalHistoryDirect({
       from,
@@ -340,12 +432,12 @@ export async function handleStaffIntakeInbound({
       sendText,
       notifyTelegram,
       auditLogger,
+      stateKey,
     });
   }
 
   // CASO B: ACTUALIZAR DATOS PERSONALES
   if (classified?.intent === "ACTUALIZAR_DATOS" || isExplicitUpdate) {
-    await deleteConversationState(stateKey);
     const updates = classified?.actualizacion || (await parsePatientUpdateFromText(text, config));
     return await handlePatientUpdateDirect({
       from,
@@ -356,6 +448,7 @@ export async function handleStaffIntakeInbound({
       sendText,
       notifyTelegram,
       auditLogger,
+      stateKey,
     });
   }
 
