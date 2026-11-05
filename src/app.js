@@ -1613,6 +1613,17 @@ if (!USE_WEBHOOK) {
   });
 }
 
+// Middleware de normalización de ruta para Vercel rewrites
+app.use((req, res, next) => {
+  const matched = req.headers["x-matched-path"] || req.headers["x-invoke-path"];
+  if (matched) {
+    req.url = matched;
+  } else if (req.url.startsWith("/src/app.js")) {
+    req.url = req.url.replace(/^\/src\/app\.js/, "") || "/";
+  }
+  next();
+});
+
 // HTTP ENDPOINTS
 
 app.get("/health", async (_req, res) => {
