@@ -35,10 +35,12 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Compatibilidad Vercel Serverless: resolver la ruta original cuando se reescribe a /src/app.js
+// Compatibilidad Vercel Serverless: mapear subrutas de Express desde el rewrite
 app.use((req, _res, next) => {
-  if (req.headers["x-matched-path"] && req.url.startsWith("/src/app.js")) {
-    req.url = req.headers["x-matched-path"];
+  if (req.query?.__path) {
+    const cleanPath = "/" + String(req.query.__path).replace(/^\/+/, "");
+    delete req.query.__path;
+    req.url = cleanPath;
   }
   next();
 });

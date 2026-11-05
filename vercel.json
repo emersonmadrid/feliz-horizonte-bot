@@ -3,6 +3,6 @@
     { "source": "/api/cron/reminders", "destination": "/api/cron/reminders.js" },
     { "source": "/api/admin/summary", "destination": "/api/admin/summary.js" },
     { "source": "/api/webhooks/calendly", "destination": "/api/webhooks/calendly.js" },
-    { "source": "/(.*)", "destination": "/src/app.js" }
+    { "source": "/(.*)", "destination": "/src/app.js?__path=$1" }
   ]
 }
