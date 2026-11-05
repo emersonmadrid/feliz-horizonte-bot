@@ -21,47 +21,19 @@ import {
 import { getConversationHistory } from "./services/conversation-history.service.js";
 import { buildHealthPayload, getBotMode } from "./utils/health.utils.js";
 import {
+  WHATSAPP_INBOUND_ROUTES,
+  getWhatsappInboundRoute,
   shouldUseReminderOnlyHandler,
   summarizeInboundMessage,
 } from "./modules/whatsapp-inbound/router.js";
 import { handleReminderOnlyInbound } from "./modules/whatsapp-inbound/reminder-only-handler.js";
-import { isIntakeMessage, forwardToIntakeService } from "./modules/whatsapp-inbound/intake-handler.js";
+import { handleStaffIntakeInbound } from "./modules/whatsapp-inbound/intake-handler.js";
 import { safeLogInboundAudit } from "./modules/whatsapp-inbound/inbound-audit.js";
 import { loadConfig as loadReminderConfig } from "./services/reminders/core/config.js";
 
 dotenv.config();
 const app = express();
 app.use(express.json());
-
-// Normalización de ruta en Express
-app.use((req, _res, next) => {
-  const target = req.headers["x-matched-path"] || (req.query && req.query.__path);
-  if (target && target !== "null" && target !== "undefined") {
-    req.url = "/" + String(target).replace(/^\/+/, "");
-  } else if (req.url.startsWith("/src/app.js")) {
-    const stripped = req.url.replace(/^\/src\/app\.js/, "");
-    req.url = stripped.startsWith("/") ? stripped : "/" + stripped;
-  }
-  next();
-});
-
-app.get("/debug-url", (req, res) => {
-  res.json({
-    url: req.url,
-    originalUrl: req.originalUrl,
-    query: req.query,
-    headers: req.headers,
-    hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-    hasGoogleClientEmail: Boolean(process.env.GOOGLE_CALENDAR_CLIENT_EMAIL),
-    hasGooglePrivateKey: Boolean(process.env.GOOGLE_CALENDAR_PRIVATE_KEY && process.env.GOOGLE_CALENDAR_PRIVATE_KEY.length > 50),
-    hasWhatsAppToken: Boolean(process.env.WHATSAPP_API_TOKEN),
-    tokenPrefix: (process.env.WHATSAPP_API_TOKEN || "").slice(0, 15),
-    hasWhatsAppPhoneId: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
-    verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
-    lastWebhook: globalThis.__lastWebhook || null,
-    lastIntake: globalThis.__lastIntake || null,
-  });
-});
 
 const {
   PUBLIC_URL,
@@ -2048,12 +2020,6 @@ app.post("/webhook/whatsapp", async (req, res) => {
     }
 
     const from = msg.from;
-    globalThis.__lastWebhook = {
-      receivedAt: new Date().toISOString(),
-      from,
-      bodyPreview: (msg.text?.body || "").slice(0, 100),
-      type: msg.type
-    };
     const audioPayload = msg.audio || msg.voice || null;
     const documentPayload = msg.document || null;
     const imagePayload = msg.image || null;
@@ -2085,15 +2051,22 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     let incomingTelegramLine = summarizeInboundMessage({ text, type: msg.type });
 
-    // Interceptor Prioritario de Admisión de Pacientes (Microservicio feliz-horizonte-intake)
-    // Solo aplica para la psicóloga o staff autorizado con #alta o plantilla de paciente
-    if (isIntakeMessage({ text, from, env: process.env })) {
+    const inboundRoute = getWhatsappInboundRoute({ text, from, env: process.env });
+
+    if (inboundRoute === WHATSAPP_INBOUND_ROUTES.STAFF_INTAKE) {
       console.log(`📋 Detectado mensaje de admisión de paciente autorizado desde ${from}`);
-      await forwardToIntakeService({ text, from, env: process.env });
+      await handleStaffIntakeInbound({
+        from,
+        text,
+        env: process.env,
+        sendWhatsAppText,
+        notifyTelegram,
+        auditLogger: (payload) => safeLogInboundAudit(getReminderConfigForAudit(), payload),
+      });
       return res.sendStatus(200);
     }
 
-    if (shouldUseReminderOnlyHandler(process.env)) {
+    if (inboundRoute === WHATSAPP_INBOUND_ROUTES.REMINDER_ONLY) {
       console.log(`ℹ️ Modo "Solo Recordatorios" activo. Redirigiendo a ${from}`);
       await handleReminderOnlyInbound({
         from,
@@ -2558,4 +2531,4 @@ if (VERCEL !== "1") {
   app.listen(port, () => console.log(`🚀 Local http://localhost:${port}`));
 }
 
-export default app;
+export default (req, res) => app(req, res);
