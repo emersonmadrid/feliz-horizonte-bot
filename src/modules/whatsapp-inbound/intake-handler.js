@@ -88,9 +88,11 @@ export async function forwardToIntakeService({ text, from, env = process.env }) 
       config
     });
     console.log('✅ Admisión completada:', result.success);
+    globalThis.__lastIntake = { ok: result.success, at: new Date().toISOString(), result };
     return { ok: result.success, data: result };
   } catch (err) {
     console.error('❌ Error procesando admisión in-process:', err);
+    globalThis.__lastIntake = { ok: false, at: new Date().toISOString(), error: err.message, stack: err.stack };
     return { ok: false, error: err.message };
   }
 }
