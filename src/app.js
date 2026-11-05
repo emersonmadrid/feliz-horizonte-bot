@@ -33,6 +33,15 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+// Normalización de rutas para Vercel rewrites (?__path=$1)
+app.use((req, _res, next) => {
+  if (req.query && req.query.__path) {
+    const rawPath = Array.isArray(req.query.__path) ? req.query.__path[0] : req.query.__path;
+    req.url = '/' + String(rawPath).replace(/^\/+/, '');
+  }
+  next();
+});
+
 const {
   PUBLIC_URL,
   TELEGRAM_BOT_TOKEN,
@@ -1613,17 +1622,6 @@ if (!USE_WEBHOOK) {
   });
 }
 
-// Middleware de normalización de ruta para Vercel rewrites
-app.use((req, res, next) => {
-  const matched = req.headers["x-matched-path"] || req.headers["x-invoke-path"];
-  if (matched) {
-    req.url = matched;
-  } else if (req.url.startsWith("/src/app.js")) {
-    req.url = req.url.replace(/^\/src\/app\.js/, "") || "/";
-  }
-  next();
-});
-
 // HTTP ENDPOINTS
 
 app.get("/health", async (_req, res) => {
@@ -1640,16 +1638,6 @@ app.get("/health", async (_req, res) => {
   });
 
   res.status(payload.ok ? 200 : 503).json(payload);
-});
-
-app.post("/", (req, res) => {
-  res.json({
-    url: req.url,
-    originalUrl: req.originalUrl,
-    matchedPath: req.headers["x-matched-path"],
-    invokePath: req.headers["x-invoke-path"],
-    forwardedUri: req.headers["x-forwarded-uri"]
-  });
 });
 
 app.get("/", (_req, res) => {
