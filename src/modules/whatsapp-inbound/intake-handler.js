@@ -252,17 +252,76 @@ async function handlePatientUpdateDirect({
 export async function handleStaffIntakeInbound({
   from,
   text,
+  buttonSelection = null,
   env = process.env,
   sendWhatsAppText,
+  sendWhatsAppButtons = null,
   notifyTelegram,
   auditLogger = null,
 }) {
-  console.log(`📋 [STAFF INTAKE] Mensaje recibido de ${from}: "${text?.slice(0, 60)}"`);
+  console.log(`📋 [STAFF INTAKE] Mensaje recibido de ${from}: "${text?.slice(0, 60)}" (button: ${buttonSelection || 'none'})`);
 
   const stateKey = `staff_intake:${from}`;
   const cleanBody = (text || "").trim().toLowerCase();
 
-  // 1. Comando de cancelación explícita
+  // 1. Manejo de botones interactivos pulsados
+  if (
+    buttonSelection === "btn_historia" ||
+    cleanBody === "🧠 historia clínica" ||
+    cleanBody === "historia clinica" ||
+    cleanBody === "historia clínica"
+  ) {
+    const msg =
+      "🧠 *Registrar Historia / Sesión de Terapia:*\n\n" +
+      "Escribe o dicta por audio el nombre del paciente y las notas de la sesión.\n\n" +
+      "*Ejemplo:*\n" +
+      `_"Sesión de Kevin Vásquez: acude refiriendo impulsos voyeristas, se trabajó técnica de coste-beneficio y se envía libro de TREC"_\n\n` +
+      `_(Yo me encargaré de ordenarlo en Motivo, Síntomas y Tratamiento en la web)_`;
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, msg);
+    }
+    return { ok: true, action: "button_prompt_historia" };
+  }
+
+  if (
+    buttonSelection === "btn_actualizar" ||
+    cleanBody === "📝 actualizar datos" ||
+    cleanBody === "actualizar datos"
+  ) {
+    const msg =
+      "📝 *Actualizar Datos de un Paciente:*\n\n" +
+      "Indica el nombre o ID del paciente y el dato a modificar.\n\n" +
+      "*Ejemplo:*\n" +
+      `_"El DNI de Valeria Mendoza es 71234567 y trabaja en BCP"_\n` +
+      `o\n` +
+      `_"Kevin Vásquez ahora vive en Miraflores"_`;
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, msg);
+    }
+    return { ok: true, action: "button_prompt_actualizar" };
+  }
+
+  if (
+    buttonSelection === "btn_alta" ||
+    cleanBody === "📋 nuevo paciente" ||
+    cleanBody === "nuevo paciente" ||
+    cleanBody === "alta paciente"
+  ) {
+    const msg =
+      "📋 *Alta de Nuevo Paciente:*\n\n" +
+      "Reenvíame el chat del paciente o escribe sus datos de contacto:\n" +
+      "• Nombre completo\n" +
+      "• Celular (9 dígitos)\n" +
+      "• Correo electrónico\n" +
+      "• Fecha de nacimiento (opcional)\n\n" +
+      `_Puedes enviarlo en un solo mensaje o por partes._`;
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, msg);
+    }
+    return { ok: true, action: "button_prompt_alta" };
+  }
+
+  // 2. Comando de cancelación explícita
   if (
     cleanBody === "#cancelar" ||
     cleanBody === "/cancelar" ||
@@ -280,7 +339,7 @@ export async function handleStaffIntakeInbound({
     return { ok: true, cancelled: true };
   }
 
-  // 2. Saludo o solicitud de menú / ayuda
+  // 3. Saludo o solicitud de menú / ayuda (con botones interactivos)
   const isHelpOrGreeting =
     cleanBody === "hola" ||
     cleanBody === "buenas" ||
@@ -297,9 +356,26 @@ export async function handleStaffIntakeInbound({
     cleanBody === "que puedes hacer?";
 
   if (isHelpOrGreeting) {
-    const helpMsg = buildHelpMenu(from);
-    if (typeof sendWhatsAppText === "function") {
-      await sendWhatsAppText(from, helpMsg);
+    const isDoctora = String(from).includes("922346747");
+    const nombreStaff = isDoctora ? "Lic. Cintya" : "Emerson";
+    const staffButtons = [
+      { id: "btn_historia", title: "🧠 Historia Clínica" },
+      { id: "btn_actualizar", title: "📝 Actualizar Datos" },
+      { id: "btn_alta", title: "📋 Nuevo Paciente" },
+    ];
+
+    if (typeof sendWhatsAppButtons === "function") {
+      await sendWhatsAppButtons(
+        from,
+        `👋 ¡Hola, *${nombreStaff}*! Soy tu Asistente Clínico de *Feliz Horizonte*.\n\n¿Qué acción deseas realizar hoy?`,
+        staffButtons,
+        "Toca un botón o escribe directamente:"
+      );
+    } else {
+      const helpMsg = buildHelpMenu(from);
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, helpMsg);
+      }
     }
     return { ok: true, action: "help_menu" };
   }
@@ -375,9 +451,26 @@ export async function handleStaffIntakeInbound({
 
   // CASO C: SALUDO O MENÚ DETECTADO POR IA
   if (classified?.intent === "AYUDA_O_SALUDO") {
-    const helpMsg = buildHelpMenu(from);
-    if (typeof sendWhatsAppText === "function") {
-      await sendWhatsAppText(from, helpMsg);
+    const isDoctora = String(from).includes("922346747");
+    const nombreStaff = isDoctora ? "Lic. Cintya" : "Emerson";
+    const staffButtons = [
+      { id: "btn_historia", title: "🧠 Historia Clínica" },
+      { id: "btn_actualizar", title: "📝 Actualizar Datos" },
+      { id: "btn_alta", title: "📋 Nuevo Paciente" },
+    ];
+
+    if (typeof sendWhatsAppButtons === "function") {
+      await sendWhatsAppButtons(
+        from,
+        `👋 ¡Hola, *${nombreStaff}*! Soy tu Asistente Clínico de *Feliz Horizonte*.\n\n¿Qué acción deseas realizar hoy?`,
+        staffButtons,
+        "Toca un botón o escribe directamente:"
+      );
+    } else {
+      const helpMsg = buildHelpMenu(from);
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, helpMsg);
+      }
     }
     return { ok: true, action: "help_menu" };
   }
