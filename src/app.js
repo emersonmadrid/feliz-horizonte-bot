@@ -49,11 +49,15 @@ app.get("/debug-url", (req, res) => {
   res.json({
     url: req.url,
     originalUrl: req.originalUrl,
+    query: req.query,
+    headers: req.headers,
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
     hasGoogleClientEmail: Boolean(process.env.GOOGLE_CALENDAR_CLIENT_EMAIL),
     hasGooglePrivateKey: Boolean(process.env.GOOGLE_CALENDAR_PRIVATE_KEY && process.env.GOOGLE_CALENDAR_PRIVATE_KEY.length > 50),
     hasWhatsAppToken: Boolean(process.env.WHATSAPP_API_TOKEN),
+    tokenPrefix: (process.env.WHATSAPP_API_TOKEN || "").slice(0, 15),
     hasWhatsAppPhoneId: Boolean(process.env.WHATSAPP_PHONE_NUMBER_ID),
+    verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     lastWebhook: globalThis.__lastWebhook || null,
     lastIntake: globalThis.__lastIntake || null,
   });
