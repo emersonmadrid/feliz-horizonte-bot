@@ -35,6 +35,14 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+// Compatibilidad Vercel Serverless: resolver la ruta original cuando se reescribe a /src/app.js
+app.use((req, _res, next) => {
+  if (req.headers["x-matched-path"] && req.url.startsWith("/src/app.js")) {
+    req.url = req.headers["x-matched-path"];
+  }
+  next();
+});
+
 const {
   PUBLIC_URL,
   TELEGRAM_BOT_TOKEN,
