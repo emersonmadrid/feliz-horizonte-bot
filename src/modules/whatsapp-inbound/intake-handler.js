@@ -1,3 +1,6 @@
+import { loadConfig } from "./intake/core/config.js";
+import { processPatientIntake } from "./intake/services/intake-orchestrator.js";
+
 export function isIntakeMessage({ text, from, env = process.env }) {
   if (!text || !from) return false;
 
@@ -48,29 +51,44 @@ export function isIntakeMessage({ text, from, env = process.env }) {
 }
 
 export async function forwardToIntakeService({ text, from, env = process.env }) {
-  const intakeUrl = env.INTAKE_SERVICE_URL || 'http://localhost:3005';
-  const apiKey = env.INTAKE_API_KEY || 'fh_intake_dev_secret_key_2026';
+  const intakeUrl = env.INTAKE_SERVICE_URL;
 
-  console.log(`📡 Reenviando mensaje de admisión a ${intakeUrl}/api/ingest desde ${from}`);
+  // Si hay un microservicio externo configurado en URL pública, reenviar por HTTP
+  if (intakeUrl && !intakeUrl.includes('localhost')) {
+    console.log(`📡 Reenviando admisión al microservicio externo: ${intakeUrl}`);
+    try {
+      const res = await fetch(`${intakeUrl}/api/ingest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${env.INTAKE_API_KEY || 'fh_intake_dev_secret_key_2026'}`
+        },
+        body: JSON.stringify({
+          text,
+          from,
+          senderName: 'WhatsApp Staff Forward'
+        })
+      });
+      return await res.json();
+    } catch (err) {
+      console.error('❌ Error llamando al microservicio externo, ejecutando fallback local:', err.message);
+    }
+  }
 
+  // Ejecución directa in-process con las credenciales activas del bot en Vercel
+  console.log(`🚀 Ejecutando admisión de paciente in-process para: ${from}`);
   try {
-    const res = await fetch(`${intakeUrl}/api/ingest`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        text,
-        from,
-        senderName: 'WhatsApp Staff Forward'
-      })
+    const config = loadConfig(env);
+    const result = await processPatientIntake({
+      text,
+      from,
+      senderName: 'Psicóloga Feliz Horizonte',
+      config
     });
-
-    const data = await res.json();
-    return { ok: res.ok, data };
+    console.log('✅ Admisión completada:', result.success);
+    return { ok: result.success, data: result };
   } catch (err) {
-    console.error('❌ Error comunicando con microservicio de admisión:', err.message);
+    console.error('❌ Error procesando admisión in-process:', err);
     return { ok: false, error: err.message };
   }
 }
