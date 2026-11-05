@@ -44,7 +44,28 @@ export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
     cleanBody.includes("telefono:") ||
     cleanBody.includes("nacimiento:");
 
-  return Boolean(hasName && hasPhoneOrDate);
+  if (hasName && hasPhoneOrDate) {
+    return true;
+  }
+
+  // 3. Conversación o mensaje reenviado de WhatsApp (timestamps [14:20] o 14:20 -)
+  const isForwardedChat =
+    /\[\d{1,2}:\d{2}/.test(text) ||
+    /\d{1,2}:\d{2}\s*-\s*/.test(text);
+
+  if (isForwardedChat) {
+    return true;
+  }
+
+  // 4. Reenvío directo de mensaje del paciente con email y teléfono
+  const hasEmail = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text);
+  const hasPhone = /\b9\d{8}\b/.test(text) || /\b\d{9}\b/.test(text);
+
+  if (hasEmail && hasPhone) {
+    return true;
+  }
+
+  return false;
 }
 
 export function getWhatsappInboundRoute({ text, from, env = process.env } = {}) {
