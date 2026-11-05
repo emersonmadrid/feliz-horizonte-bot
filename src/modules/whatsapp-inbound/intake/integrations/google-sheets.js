@@ -71,6 +71,20 @@ function formatPeruDate(date = new Date()) {
   return formatter.format(date).replace(',', '');
 }
 
+export function extractDateOnly(dateStr) {
+  if (!dateStr) return '';
+  const s = String(dateStr).trim();
+  const dmyMatch = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (dmyMatch) {
+    return dmyMatch[1].padStart(2, '0') + '/' + dmyMatch[2].padStart(2, '0') + '/' + dmyMatch[3];
+  }
+  const ymdMatch = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (ymdMatch) {
+    return ymdMatch[3].padStart(2, '0') + '/' + ymdMatch[2].padStart(2, '0') + '/' + ymdMatch[1];
+  }
+  return s.split(' ')[0];
+}
+
 export async function lookupLeadGclid(codigoLead, config) {
   if (!codigoLead) return '';
   const token = await getAccessToken(config);
@@ -517,21 +531,15 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
 
   const token = await getAccessToken(config);
 
-  const histIdUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Historia!A:A`;
-  const histIdRes = await fetch(histIdUrl, {
+  const histUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Historia!A2:K`;
+  const histRes = await fetch(histUrl, {
     headers: { Authorization: `Bearer ${token}` }
   });
-  if (!histIdRes.ok) {
-    throw new Error(`Error consultando IDs en Historia: ${histIdRes.statusText}`);
+  if (!histRes.ok) {
+    throw new Error(`Error consultando Historia: ${histRes.statusText}`);
   }
-  const histIdData = await histIdRes.json();
-  const histRows = histIdData.values || [];
-  let maxId = 0;
-  for (let i = 1; i < histRows.length; i++) {
-    const n = parseInt(histRows[i][0], 10);
-    if (!isNaN(n) && n > maxId) maxId = n;
-  }
-  const nextHistoryId = maxId + 1;
+  const histData = await histRes.json();
+  const histRows = histData.values || [];
 
   let medico = historyData.medico || '';
   if (!medico) {
@@ -546,6 +554,109 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
   }
 
   const nowPeru = formatPeruDate();
+  const todayOnly = extractDateOnly(historyData.fecha || nowPeru);
+  const targetPatientId = String(patient.id);
+
+  let existingIndex = -1;
+  let maxId = 0;
+
+  for (let i = 0; i < histRows.length; i++) {
+    const row = histRows[i];
+    const n = parseInt(row[0], 10);
+    if (!isNaN(n) && n > maxId) maxId = n;
+
+    const rowPatientId = String(row[1] || '').trim();
+    const rowDateOnly = extractDateOnly(row[2] || '');
+    const rowStatus = String(row[10] || '').trim().toUpperCase();
+
+    // Mismo paciente, activo y fecha de hoy
+    if (rowPatientId === targetPatientId && rowStatus !== 'ARCHIVADO' && rowDateOnly === todayOnly) {
+      existingIndex = i;
+    }
+  }
+
+  // CASO 1: YA EXISTE UNA HISTORIA REGISTRADA HOY -> CONSOLIDAR Y ANEXAR NOTA
+  if (existingIndex !== -1) {
+    const existing = histRows[existingIndex];
+    const sheetRowNumber = existingIndex + 2;
+
+    const mergeText = (oldVal, newVal, separator = '\n') => {
+      const o = (oldVal || '').trim();
+      const n = (newVal || '').trim();
+      if (!n) return o;
+      if (!o) return n;
+      if (o.toLowerCase().includes(n.toLowerCase())) return o;
+      return `${o}${separator}${n}`;
+    };
+
+    const updatedRow = [
+      existing[0],
+      existing[1],
+      existing[2],
+      mergeText(existing[3], historyData.motivo, '\n[Adicional]: '),
+      mergeText(existing[4], historyData.sintomas, '; '),
+      mergeText(existing[5], historyData.diagnostico, '; '),
+      mergeText(existing[6], historyData.tratamiento, '\n• '),
+      mergeText(existing[7], historyData.observaciones, '\n[Nota agregada]: '),
+      existing[8] || medico,
+      mergeText(existing[9], historyData.signos, '; '),
+      existing[10] || 'ACTIVO'
+    ];
+
+    const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Historia!A${sheetRowNumber}:K${sheetRowNumber}?valueInputOption=USER_ENTERED`;
+    const updateRes = await fetch(updateUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ values: [updatedRow] })
+    });
+
+    if (!updateRes.ok) {
+      const errText = await updateRes.text();
+      throw new Error(`Error actualizando fila en Historia: ${errText}`);
+    }
+
+    try {
+      const auditUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Auditoria!A1:append?valueInputOption=USER_ENTERED`;
+      await fetch(auditUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          values: [[
+            nowPeru,
+            'ACTUALIZAR',
+            'HISTORIA',
+            String(existing[0]),
+            JSON.stringify({
+              pacienteId: patient.id,
+              paciente: `${patient.nombre} ${patient.apellidos}`,
+              accion: 'nota_agregada_mismo_dia'
+            })
+          ]]
+        })
+      });
+    } catch (_) {}
+
+    return {
+      success: true,
+      isAppended: true,
+      historyId: existing[0],
+      patientId: patient.id,
+      patientName: `${patient.nombre} ${patient.apellidos}`.trim(),
+      fecha: existing[2],
+      medico: existing[8] || medico,
+      motivo: updatedRow[3],
+      tratamiento: updatedRow[6]
+    };
+  }
+
+  // CASO 2: PRIMERA CONSULTA DEL DÍA -> NUEVA FILA
+  const nextHistoryId = maxId + 1;
   const fechaConsulta = historyData.fecha || nowPeru;
 
   const newRow = [
@@ -607,9 +718,10 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
 
   return {
     success: true,
+    isAppended: false,
     historyId: nextHistoryId,
     patientId: patient.id,
-    patientName: patient.nombre,
+    patientName: `${patient.nombre} ${patient.apellidos}`.trim(),
     fecha: fechaConsulta,
     medico: medico,
     motivo: historyData.motivo,

@@ -109,7 +109,9 @@ async function handleClinicalHistoryDirect({
     }
 
     // Confirmación concisa y directa
-    const responseText = `✅ Sesión de *${result.patientName}* guardada en Historia Clínica.`;
+    const responseText = result.isAppended
+      ? `✅ Nota agregada a la sesión de hoy de *${result.patientName}*.`
+      : `✅ Sesión de *${result.patientName}* guardada en Historia Clínica.`;
     await sendText(from, responseText);
 
     if (typeof notifyTelegram === "function") {
