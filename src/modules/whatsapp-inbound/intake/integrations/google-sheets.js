@@ -119,6 +119,12 @@ export async function checkExistingPatient(phone, email, config) {
     const rowNombre = `${row[1] || ''} ${row[2] || ''}`.trim();
     const rowPhone = (row[6] || '').replace(/\D/g, '');
     const rowEmail = (row[7] || '').trim().toLowerCase();
+    const rowEstado = (row[18] || '').trim().toUpperCase();
+
+    // Si el registro está archivado (eliminación lógica), no se considera duplicado activo
+    if (rowEstado === 'ARCHIVADO') {
+      continue;
+    }
 
     if (cleanPhone && rowPhone && cleanPhone === rowPhone) {
       return { exists: true, id: rowId, nombre: rowNombre, motivo: 'celular_coincidente' };
