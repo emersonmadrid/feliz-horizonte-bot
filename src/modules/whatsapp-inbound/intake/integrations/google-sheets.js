@@ -98,7 +98,7 @@ export async function lookupLeadGclid(codigoLead, config) {
 
 export async function checkExistingPatient(phone, email, config) {
   const token = await getAccessToken(config);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:H`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:X`;
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` }
@@ -250,5 +250,198 @@ export async function insertPatientRow(patient, creatorEmail, config) {
     fullName: `${patient.nombre} ${patient.apellidos}`.trim(),
     telefono: patient.telefono,
     gclidAsignado: !!gclid
+  };
+}
+
+export async function updatePatientRow(target, updates, updaterEmail, config) {
+  const token = await getAccessToken(config);
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A2:X`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    throw new Error(`Error consultando Pacientes: ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  const rows = data.values || [];
+
+  const cleanTarget = String(target || '').trim();
+  const cleanTargetDigits = cleanTarget.replace(/\D/g, '');
+
+  let matchedIndex = -1;
+  let matchedRow = null;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowId = String(row[0] || '').trim();
+    const rowPhone = String(row[6] || '').replace(/\D/g, '');
+    const rowNombre = `${row[1] || ''} ${row[2] || ''}`.trim();
+
+    // 1. Coincidencia por ID exacto
+    if (cleanTarget === rowId) {
+      matchedIndex = i;
+      matchedRow = row;
+      break;
+    }
+
+    // 2. Coincidencia por celular
+    if (cleanTargetDigits.length >= 8 && rowPhone && (rowPhone === cleanTargetDigits || rowPhone.endsWith(cleanTargetDigits) || cleanTargetDigits.endsWith(rowPhone))) {
+      matchedIndex = i;
+      matchedRow = row;
+      break;
+    }
+
+    // 3. Coincidencia por nombre (mínimo 4 caracteres y no numérico)
+    if (cleanTarget.length >= 4 && isNaN(Number(cleanTarget))) {
+      if (rowNombre.toLowerCase().includes(cleanTarget.toLowerCase())) {
+        matchedIndex = i;
+        matchedRow = row;
+        break;
+      }
+    }
+  }
+
+  if (matchedIndex === -1 || !matchedRow) {
+    return {
+      success: false,
+      reason: 'not_found',
+      target: cleanTarget
+    };
+  }
+
+  const patientId = matchedRow[0];
+  const patientNombre = `${matchedRow[1] || ''} ${matchedRow[2] || ''}`.trim();
+  const rowEstado = (matchedRow[18] || '').trim().toUpperCase();
+
+  if (rowEstado === 'ARCHIVADO') {
+    return {
+      success: false,
+      reason: 'archived',
+      id: patientId,
+      nombre: patientNombre
+    };
+  }
+
+  const sheetRowNumber = matchedIndex + 2; // Fila 1 es header, índice 0 es fila 2
+  const updatedRow = [...matchedRow];
+
+  // Asegurar que updatedRow tenga al menos 24 columnas (A hasta X)
+  while (updatedRow.length < 24) {
+    updatedRow.push('');
+  }
+
+  const modifiedFields = [];
+
+  if (updates.nombre) {
+    updatedRow[1] = updates.nombre;
+    modifiedFields.push({ label: 'Nombre', value: updates.nombre });
+  }
+  if (updates.apellidos) {
+    updatedRow[2] = updates.apellidos;
+    modifiedFields.push({ label: 'Apellidos', value: updates.apellidos });
+  }
+  if (updates.dni) {
+    updatedRow[3] = updates.dni;
+    modifiedFields.push({ label: 'DNI', value: updates.dni });
+  }
+  if (updates.fechaNacimiento) {
+    updatedRow[4] = updates.fechaNacimiento;
+    modifiedFields.push({ label: 'F. Nacimiento', value: updates.fechaNacimiento });
+  }
+  if (updates.sexo) {
+    updatedRow[5] = updates.sexo;
+    modifiedFields.push({ label: 'Sexo', value: updates.sexo });
+  }
+  if (updates.telefono) {
+    updatedRow[6] = updates.telefono;
+    modifiedFields.push({ label: 'Celular', value: updates.telefono });
+  }
+  if (updates.email) {
+    updatedRow[7] = updates.email;
+    modifiedFields.push({ label: 'Email', value: updates.email });
+  }
+  if (updates.direccion) {
+    updatedRow[8] = updates.direccion;
+    modifiedFields.push({ label: 'Dirección', value: updates.direccion });
+  }
+  if (updates.grado) {
+    updatedRow[10] = updates.grado;
+    modifiedFields.push({ label: 'Grado', value: updates.grado });
+  }
+  if (updates.trabajo || updates.ocupacion) {
+    const jobVal = updates.trabajo || updates.ocupacion;
+    updatedRow[11] = jobVal;
+    if (updates.ocupacion) {
+      updatedRow[13] = updates.ocupacion;
+    }
+    modifiedFields.push({ label: 'Ocupación/Trabajo', value: jobVal });
+  }
+  if (updates.estadocivil) {
+    updatedRow[12] = updates.estadocivil;
+    modifiedFields.push({ label: 'Estado Civil', value: updates.estadocivil });
+  }
+  if (updates.observaciones) {
+    const prevObs = (updatedRow[14] || '').trim();
+    updatedRow[14] = prevObs ? `${prevObs} | ${updates.observaciones}` : updates.observaciones;
+    modifiedFields.push({ label: 'Observaciones', value: updatedRow[14] });
+  }
+
+  const nowPeru = formatPeruDate();
+  updatedRow[20] = nowPeru; // ACTUALIZADO_EN
+  updatedRow[21] = updaterEmail || 'whatsapp-bot'; // ACTUALIZADO_POR
+
+  // Enviar fila actualizada a Google Sheets
+  const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Pacientes!A${sheetRowNumber}:X${sheetRowNumber}?valueInputOption=USER_ENTERED`;
+
+  const updateRes = await fetch(updateUrl, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      values: [updatedRow]
+    })
+  });
+
+  if (!updateRes.ok) {
+    const errText = await updateRes.text();
+    throw new Error(`Error actualizando fila en Google Sheets: ${errText}`);
+  }
+
+  // Registrar auditoría en pestaña Auditoria si existe
+  try {
+    const auditUrl = `https://sheets.googleapis.com/v4/spreadsheets/${config.googleSheets.spreadsheetId}/values/Auditoria!A1:append?valueInputOption=USER_ENTERED`;
+    await fetch(auditUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        values: [[
+          nowPeru,
+          'ACTUALIZAR',
+          'PACIENTE',
+          String(patientId),
+          JSON.stringify({
+            origen: 'whatsapp_intake_update',
+            actualizadoPor: updaterEmail,
+            modificaciones: modifiedFields
+          })
+        ]]
+      })
+    });
+  } catch (auditErr) {
+    console.warn('Auditoría no registrada (no crítico):', auditErr.message);
+  }
+
+  return {
+    success: true,
+    id: patientId,
+    fullName: `${updatedRow[1]} ${updatedRow[2]}`.trim() || patientNombre,
+    modifiedFields
   };
 }

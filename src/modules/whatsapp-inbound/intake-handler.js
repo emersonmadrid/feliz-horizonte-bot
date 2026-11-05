@@ -1,5 +1,7 @@
 import { loadConfig } from "./intake/core/config.js";
 import { processPatientIntake } from "./intake/services/intake-orchestrator.js";
+import { parsePatientUpdateFromText } from "./intake/domain/parser.js";
+import { updatePatientRow } from "./intake/integrations/google-sheets.js";
 import {
   getConversationState,
   mergeConversationState,
@@ -7,6 +9,132 @@ import {
 } from "../../services/state.service.js";
 
 const DRAFT_TTL_MS = 15 * 60 * 1000; // 15 minutos para completar un registro por partes
+
+async function handlePatientUpdateFlow({
+  from,
+  text,
+  config,
+  sendWhatsAppText,
+  notifyTelegram,
+  auditLogger,
+}) {
+  try {
+    const parsed = await parsePatientUpdateFromText(text, config);
+
+    if (!parsed.target) {
+      const errorMsg =
+        "⚠️ *Falta el identificador del paciente:*\n" +
+        "Por favor indica el ID (ej: 192) o número de celular del paciente que deseas actualizar.\n\n" +
+        "*Ejemplo:*\n" +
+        "`#actualizar 192 DNI: 71234567, Ocupación: Contadora`\n" +
+        "o\n" +
+        "`#actualizar 955443322 vive en Miraflores`";
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, errorMsg);
+      }
+      return { ok: false, reason: "missing_target" };
+    }
+
+    const hasAnyField =
+      parsed.dni ||
+      parsed.fechaNacimiento ||
+      parsed.sexo ||
+      parsed.telefono ||
+      parsed.email ||
+      parsed.direccion ||
+      parsed.trabajo ||
+      parsed.ocupacion ||
+      parsed.estadocivil ||
+      parsed.grado ||
+      parsed.nombre ||
+      parsed.apellidos ||
+      parsed.observaciones;
+
+    if (!hasAnyField) {
+      const errorMsg =
+        `⚠️ *No se detectaron datos nuevos para actualizar en el paciente #${parsed.target}.*\n\n` +
+        "*Ejemplo:*\n" +
+        `\`#actualizar ${parsed.target} DNI: 71234567, Ocupación: Contadora\``;
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, errorMsg);
+      }
+      return { ok: false, reason: "no_fields_to_update" };
+    }
+
+    const updaterEmail = `whatsapp:${from}`;
+    const updateResult = await updatePatientRow(parsed.target, parsed, updaterEmail, config);
+
+    if (!updateResult.success) {
+      let errorMsg = `⚠️ No se pudo actualizar el paciente: ${updateResult.reason}`;
+      if (updateResult.reason === "not_found") {
+        errorMsg =
+          `⚠️ *No se encontró ningún paciente con el ID o celular:* \`${parsed.target}\`\n` +
+          "Verifica que el número o ID sea correcto.";
+      } else if (updateResult.reason === "archived") {
+        errorMsg =
+          `⚠️ *El paciente #${updateResult.id} (${updateResult.nombre}) está archivado.*\n` +
+          "No se pueden modificar fichas archivadas desde WhatsApp.";
+      }
+
+      if (typeof sendWhatsAppText === "function") {
+        await sendWhatsAppText(from, errorMsg);
+      }
+      return { ok: false, reason: updateResult.reason };
+    }
+
+    // Éxito: formatear confirmación a WhatsApp
+    const lines = [
+      `✅ *Ficha del paciente #${updateResult.id} (${updateResult.fullName}) actualizada con éxito:*`
+    ];
+    for (const mod of updateResult.modifiedFields) {
+      lines.push(`• ${mod.label}: *${mod.value}*`);
+    }
+    lines.push("");
+    lines.push("🔗 Ficha: https://app.felizhorizonte.pe");
+
+    const responseText = lines.join("\n");
+
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, responseText);
+    }
+
+    if (typeof notifyTelegram === "function") {
+      await notifyTelegram(
+        "📝 FICHA DE PACIENTE ACTUALIZADA",
+        [
+          `ID: #${updateResult.id}`,
+          `Nombre: ${updateResult.fullName}`,
+          ...updateResult.modifiedFields.map((m) => `${m.label}: ${m.value}`),
+          `Actualizado por: WhatsApp ${from}`
+        ],
+        from
+      );
+    }
+
+    if (typeof auditLogger === "function") {
+      await auditLogger({
+        phone: from,
+        messageText: text,
+        messageType: "text",
+        route: "staff_intake",
+        action: "patient_updated",
+        status: "handled",
+        metadata: {
+          patientId: updateResult.id,
+          modifiedFields: updateResult.modifiedFields
+        }
+      });
+    }
+
+    return { ok: true, data: updateResult };
+  } catch (err) {
+    console.error("❌ Error en handlePatientUpdateFlow:", err.message);
+    if (typeof sendWhatsAppText === "function") {
+      await sendWhatsAppText(from, `⚠️ Error al actualizar ficha: ${err.message}`);
+    }
+    return { ok: false, error: err.message };
+  }
+}
 
 export async function handleStaffIntakeInbound({
   from,
@@ -31,6 +159,19 @@ export async function handleStaffIntakeInbound({
       );
     }
     return { ok: true, cancelled: true };
+  }
+
+  // 2. Comando de actualización / modificación de ficha existente
+  const isUpdateCommand = /^(#|\/)?(actualizar|modificar|agregar|update)\b/i.test(text.trim());
+  if (isUpdateCommand) {
+    return await handlePatientUpdateFlow({
+      from,
+      text,
+      config: loadConfig(env),
+      sendWhatsAppText,
+      notifyTelegram,
+      auditLogger,
+    });
   }
 
   // 2. Revisar si existe un borrador previo no expirado

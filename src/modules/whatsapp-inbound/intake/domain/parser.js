@@ -18,48 +18,88 @@ Debes responder ÚNICAMENTE con un objeto JSON válido con los siguientes campos
 - "codigoLead": Si encuentras un código de lead de Feliz Horizonte que comience con FH (ej: FH1234, FHABC), extráelo aquí; si no, null.
 - "observaciones": Cualquier detalle extra relevante o null.`;
 
+const SYSTEM_INSTRUCTION_UPDATE = `Eres el asistente clínico de admisión del Centro Psicológico y Psiquiátrico 'Feliz Horizonte'.
+Tu labor es interpretar mensajes del personal médico que solicitan ACTUALIZAR o MODIFICAR la ficha de un paciente existente.
+
+Debes responder ÚNICAMENTE con un objeto JSON válido con los siguientes campos:
+- "target": El identificador del paciente provisto en el mensaje. Puede ser el ID numérico (ej: "192", "191"), su número de celular actual (ej: "955443322") o su nombre si no hay número. Si no se puede determinar, pon null.
+- "dni": DNI de 8 dígitos si se menciona, o null.
+- "fechaNacimiento": Fecha en formato YYYY-MM-DD si se menciona, o null.
+- "sexo": "F" o "M" si se menciona o infiere con certeza, o null.
+- "telefono": Número de celular nuevo (9 dígitos) si se pide cambiar o actualizar el teléfono, o null.
+- "email": Correo electrónico en minúsculas si se menciona, o null.
+- "direccion": Dirección física si se menciona, o null.
+- "trabajo": Ocupación, puesto o trabajo si se menciona, o null.
+- "ocupacion": Ocupación si se menciona, o null.
+- "estadocivil": Estado civil si se menciona, o null.
+- "grado": Grado de instrucción si se menciona, o null.
+- "nombre": Nombres si se pide corregir, o null.
+- "apellidos": Apellidos si se pide corregir, o null.
+- "observaciones": Notas o motivo nuevo si se menciona, o null.
+
+SOLO asigna valor a los campos que el mensaje pide explícitamente agregar o actualizar. Todo lo demás déjalo en null.`;
+
+async function callGeminiGenerate({ prompt, systemInstruction, config }) {
+  const models = [
+    config.geminiModel || 'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-3.5-flash'
+  ];
+  const uniqueModels = [...new Set(models)];
+
+  let lastError = null;
+  for (const model of uniqueModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiApiKey}`;
+      const payload = {
+        contents: [{ parts: [{ text: prompt }] }],
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json'
+        }
+      };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        if (res.status === 429 || res.status === 404 || res.status === 503) {
+          console.warn(`⚠️ Modelo ${model} respondió ${res.status}. Probando fallback...`);
+          lastError = new Error(`Error en ${model} (${res.status}): ${errorText}`);
+          continue;
+        }
+        throw new Error(`Error llamando a Gemini con modelo ${model} (${res.status}): ${errorText}`);
+      }
+
+      const result = await res.json();
+      const rawJson = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (rawJson) {
+        return rawJson;
+      }
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️ Fallo llamada con ${model}:`, err.message);
+    }
+  }
+
+  throw lastError || new Error('No se pudo obtener respuesta de ningún modelo Gemini configurado');
+}
+
 export async function parsePatientFromText(text, config) {
   if (!text || !text.trim()) {
     throw new Error('Texto de entrada vacío');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`;
-
-  const payload = {
-    contents: [
-      {
-        parts: [
-          { text: text }
-        ]
-      }
-    ],
-    systemInstruction: {
-      parts: [
-        { text: SYSTEM_INSTRUCTION }
-      ]
-    },
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: 'application/json'
-    }
-  };
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+  const rawJson = await callGeminiGenerate({
+    prompt: text,
+    systemInstruction: SYSTEM_INSTRUCTION,
+    config
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Error llamando a Gemini (${response.status}): ${errorText}`);
-  }
-
-  const result = await response.json();
-  const rawJson = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawJson) {
-    throw new Error('Gemini no devolvió contenido estructurado');
-  }
 
   const parsed = JSON.parse(rawJson);
 
@@ -77,5 +117,43 @@ export async function parsePatientFromText(text, config) {
     grado: parsed.grado ? String(parsed.grado).trim() : '',
     codigoLead: parsed.codigoLead ? String(parsed.codigoLead).trim().toUpperCase() : '',
     observaciones: parsed.observaciones || ''
+  };
+}
+
+export async function parsePatientUpdateFromText(text, config) {
+  if (!text || !text.trim()) {
+    throw new Error('Texto de entrada vacío');
+  }
+
+  const rawJson = await callGeminiGenerate({
+    prompt: text,
+    systemInstruction: SYSTEM_INSTRUCTION_UPDATE,
+    config
+  });
+
+  const parsed = JSON.parse(rawJson);
+
+  let target = parsed.target ? String(parsed.target).trim() : null;
+  // Respaldo regex para extraer target si el LLM lo omitió
+  if (!target) {
+    const m = text.match(/(?:#|\/)?(?:actualizar|modificar|agregar|update)\s+(\d{1,9})/i);
+    if (m) target = m[1];
+  }
+
+  return {
+    target: target,
+    nombre: parsed.nombre ? capitalizeWords(parsed.nombre) : null,
+    apellidos: parsed.apellidos ? capitalizeWords(parsed.apellidos) : null,
+    dni: parsed.dni ? String(parsed.dni).replace(/\D/g, '') : null,
+    fechaNacimiento: parsed.fechaNacimiento ? normalizeDate(parsed.fechaNacimiento) : null,
+    sexo: parsed.sexo ? String(parsed.sexo).toUpperCase() : null,
+    telefono: parsed.telefono ? normalizePhone(parsed.telefono) : null,
+    email: parsed.email ? normalizeEmail(parsed.email) : null,
+    direccion: parsed.direccion ? String(parsed.direccion).trim() : null,
+    trabajo: parsed.trabajo ? String(parsed.trabajo).trim() : null,
+    ocupacion: parsed.ocupacion ? String(parsed.ocupacion).trim() : null,
+    estadocivil: parsed.estadocivil ? String(parsed.estadocivil).trim() : null,
+    grado: parsed.grado ? String(parsed.grado).trim() : null,
+    observaciones: parsed.observaciones ? String(parsed.observaciones).trim() : null
   };
 }

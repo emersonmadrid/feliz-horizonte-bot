@@ -38,7 +38,8 @@ export async function processPatientIntake({ text, from, senderName, config }) {
       `• Nombre: *${result.existingNombre}*\n` +
       `• ID en sistema: *#${result.existingId}*\n` +
       `• Coincidencia por: ${result.motivo === 'celular_coincidente' ? 'Celular' : 'Email'}\n\n` +
-      `No se creó un registro duplicado.`;
+      `💡 *Para actualizar o agregar datos a su ficha:*\n` +
+      `\`#actualizar ${result.existingId} [nuevos datos]\``;
   } else {
     responseText = `✅ *Paciente registrado(a) con éxito en Feliz Horizonte:*\n\n` +
       `• ID: *#${result.id}*\n` +

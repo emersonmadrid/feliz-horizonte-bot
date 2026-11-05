@@ -31,7 +31,18 @@ export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
     cleanBody.startsWith("/registro") ||
     cleanBody.startsWith("#cancelar") ||
     cleanBody.startsWith("/cancelar") ||
-    cleanBody.startsWith("#anular")
+    cleanBody.startsWith("#anular") ||
+    cleanBody.startsWith("#actualizar") ||
+    cleanBody.startsWith("/actualizar") ||
+    cleanBody.startsWith("actualizar ") ||
+    cleanBody.startsWith("#modificar") ||
+    cleanBody.startsWith("/modificar") ||
+    cleanBody.startsWith("modificar ") ||
+    cleanBody.startsWith("#agregar") ||
+    cleanBody.startsWith("/agregar") ||
+    cleanBody.startsWith("agregar ") ||
+    cleanBody.startsWith("#update") ||
+    cleanBody.startsWith("/update")
   ) {
     return true;
   }
