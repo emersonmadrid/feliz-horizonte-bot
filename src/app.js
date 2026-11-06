@@ -2070,6 +2070,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
         text,
         buttonSelection,
         env: process.env,
+        sendWhatsAppText,
         notifyTelegram,
         auditLogger: (payload) => safeLogInboundAudit(getReminderConfigForAudit(), payload),
       });

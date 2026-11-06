@@ -14,7 +14,6 @@ export async function sendWhatsAppMessage({ to, text, config }) {
 
   const payload = {
     messaging_product: 'whatsapp',
-    recipient_type: 'individual',
     to: cleanTo,
     type: 'text',
     text: { body: text }
@@ -80,7 +79,6 @@ export async function sendWhatsAppButtons({ to, text, buttons, footer = '', conf
       },
       body: JSON.stringify({
         messaging_product: 'whatsapp',
-        recipient_type: 'individual',
         to: cleanTo,
         type: 'interactive',
         interactive: interactivePayload,
