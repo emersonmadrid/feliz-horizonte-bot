@@ -88,19 +88,50 @@ async function handleClinicalHistoryDirect({
     });
 
     if (!result.success) {
-      let errorMsg = `⚠️ No se pudo registrar la consulta: ${result.reason}`;
       if (result.reason === "multiple") {
-        errorMsg =
-          `⚠️ Hay varios pacientes con "${target}". Indica el ID o nombre completo:\n` +
-          result.matches.map((m) => `• #${m.id} ${m.nombre}`).join("\n");
-      } else if (result.reason === "not_found") {
-        errorMsg = `⚠️ No encontré al paciente "${target}". ¿Cuál es su nombre o ID?`;
-      } else if (result.reason === "archived") {
-        errorMsg = `⚠️ El paciente #${result.id} (${result.nombre}) está archivado.`;
-        if (stateKey) await deleteConversationState(stateKey);
+        if (stateKey) {
+          await mergeConversationState(stateKey, {
+            pendingClinical: {
+              historiaData,
+              rawText,
+              updatedAt: Date.now(),
+            },
+          });
+        }
+        const list = result.matches
+          .map((m) => `• *#${m.id}* ${m.nombre}${m.dni ? ` (DNI: ${m.dni})` : ""}`)
+          .join("\n");
+        const msg =
+          `Encontré varios pacientes con "${target}". ¿A cuál corresponde?\n\n` +
+          `${list}\n\n` +
+          `_Responde con el ID (ej: ${result.matches[0]?.id})._`;
+        await sendText(from, msg);
+        return { ok: false, reason: "multiple", pendingTarget: true };
       }
 
-      await sendText(from, errorMsg);
+      if (result.reason === "not_found") {
+        if (stateKey) {
+          await mergeConversationState(stateKey, {
+            pendingClinical: {
+              historiaData,
+              rawText,
+              updatedAt: Date.now(),
+            },
+          });
+        }
+        const errorMsg = `⚠️ No encontré al paciente "${target}". ¿Cuál es su nombre o ID?`;
+        await sendText(from, errorMsg);
+        return { ok: false, reason: "not_found", pendingTarget: true };
+      }
+
+      if (result.reason === "archived") {
+        const errorMsg = `⚠️ El paciente #${result.id} (${result.nombre}) está archivado.`;
+        if (stateKey) await deleteConversationState(stateKey);
+        await sendText(from, errorMsg);
+        return { ok: false, reason: "archived" };
+      }
+
+      await sendText(from, `⚠️ No se pudo registrar la consulta: ${result.reason}`);
       return { ok: false, reason: result.reason };
     }
 
@@ -181,19 +212,50 @@ async function handlePatientUpdateDirect({
     const updateResult = await updatePatientRow(target, updates, updaterEmail, config);
 
     if (!updateResult.success) {
-      let errorMsg = `⚠️ No se pudo actualizar el paciente: ${updateResult.reason}`;
       if (updateResult.reason === "multiple") {
-        errorMsg =
-          `⚠️ Hay varios pacientes con "${target}". Indica el ID o nombre completo:\n` +
-          updateResult.matches.map((m) => `• #${m.id} ${m.nombre}`).join("\n");
-      } else if (updateResult.reason === "not_found") {
-        errorMsg = `⚠️ No encontré al paciente "${target}". ¿Cuál es su nombre o ID?`;
-      } else if (updateResult.reason === "archived") {
-        errorMsg = `⚠️ El paciente #${updateResult.id} (${updateResult.nombre}) está archivado.`;
-        if (stateKey) await deleteConversationState(stateKey);
+        if (stateKey) {
+          await mergeConversationState(stateKey, {
+            pendingUpdate: {
+              updates,
+              rawText,
+              updatedAt: Date.now(),
+            },
+          });
+        }
+        const list = updateResult.matches
+          .map((m) => `• *#${m.id}* ${m.nombre}${m.dni ? ` (DNI: ${m.dni})` : ""}`)
+          .join("\n");
+        const msg =
+          `Encontré varios pacientes con "${target}". ¿A cuál deseas actualizar?\n\n` +
+          `${list}\n\n` +
+          `_Responde con el ID (ej: ${updateResult.matches[0]?.id})._`;
+        await sendText(from, msg);
+        return { ok: false, reason: "multiple", pendingTarget: true };
       }
 
-      await sendText(from, errorMsg);
+      if (updateResult.reason === "not_found") {
+        if (stateKey) {
+          await mergeConversationState(stateKey, {
+            pendingUpdate: {
+              updates,
+              rawText,
+              updatedAt: Date.now(),
+            },
+          });
+        }
+        const errorMsg = `⚠️ No encontré al paciente "${target}". ¿Cuál es su nombre o ID?`;
+        await sendText(from, errorMsg);
+        return { ok: false, reason: "not_found", pendingTarget: true };
+      }
+
+      if (updateResult.reason === "archived") {
+        const errorMsg = `⚠️ El paciente #${updateResult.id} (${updateResult.nombre}) está archivado.`;
+        if (stateKey) await deleteConversationState(stateKey);
+        await sendText(from, errorMsg);
+        return { ok: false, reason: "archived" };
+      }
+
+      await sendText(from, `⚠️ No se pudo actualizar el paciente: ${updateResult.reason}`);
       return { ok: false, reason: updateResult.reason };
     }
 
