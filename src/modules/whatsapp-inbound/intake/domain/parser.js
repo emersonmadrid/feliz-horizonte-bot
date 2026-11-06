@@ -41,9 +41,11 @@ SOLO asigna valor a los campos que el mensaje pide explícitamente agregar o act
 
 async function callGeminiGenerate({ prompt, systemInstruction, config }) {
   const models = [
-    config.geminiModel || 'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-3.5-flash'
+    config.geminiModel || 'gemini-3.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-flash-latest',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite'
   ];
   const uniqueModels = [...new Set(models)];
 

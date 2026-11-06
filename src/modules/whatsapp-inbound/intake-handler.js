@@ -318,8 +318,45 @@ export async function handleStaffIntakeInbound({
   notifyTelegram,
   auditLogger = null,
 }) {
-  console.log(`📋 [STAFF INTAKE] Mensaje de ${from}: "${text?.slice(0, 60)}" (button: ${buttonSelection || "none"})`);
+  console.log(`📋 [STAFF INTAKE GATEWAY] Mensaje de ${from}: "${text?.slice(0, 60)}" (button: ${buttonSelection || "none"})`);
 
+  // =========================================================================
+  // ARQUITECTURA DESACOPLADA: Delegación al microservicio independiente HTTP
+  // =========================================================================
+  const intakeUrl = env.INTAKE_SERVICE_URL;
+  const apiKey = env.INTAKE_API_KEY || "fh_intake_dev_secret_key_2026";
+
+  if (intakeUrl) {
+    console.log(`🌐 [GATEWAY] Delegando admisión/historia clínica a microservicio: ${intakeUrl}`);
+    try {
+      const res = await fetch(`${intakeUrl.replace(/\/$/, "")}/api/staff-intake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ from, text, buttonSelection }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`✅ [GATEWAY] Microservicio respondió OK: ${data.action || "success"}`);
+        if (data.replyText && typeof sendWhatsAppText === "function") {
+          await sendWhatsAppText(from, data.replyText);
+        }
+        return data;
+      } else {
+        const errText = await res.text();
+        console.warn(`⚠️ [GATEWAY] Microservicio respondió error ${res.status}: ${errText.slice(0, 100)}`);
+      }
+    } catch (err) {
+      console.warn(`⚠️ [GATEWAY] Falló microservicio HTTP (${err.message}). Usando fallback interno...`);
+    }
+  }
+
+  // =========================================================================
+  // Fallback interno resiliente (en caso de que el microservicio esté apagado)
+  // =========================================================================
   const config = loadConfig(env);
   const sendText = (to, msg) => replyText(to, msg, config, sendWhatsAppText);
   const sendButtons = (to, body, buttons) => replyButtons(to, body, buttons, config, customSendButtons);
