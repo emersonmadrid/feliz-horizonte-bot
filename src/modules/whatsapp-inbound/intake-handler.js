@@ -31,7 +31,7 @@ export async function handleStaffIntakeInbound({
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ from, text, buttonSelection }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(25000),
     });
 
     if (!res.ok) {
