@@ -304,7 +304,9 @@ export async function findPatient(target, config) {
         found: true,
         patient: {
           id: String(row[0]),
-          nombre: `${row[1] || ''} ${row[2] || ''}`.trim(),
+          nombre: (row[1] || '').trim(),
+          apellidos: (row[2] || '').trim(),
+          fullName: `${row[1] || ''} ${row[2] || ''}`.trim(),
           estado: (row[18] || '').trim().toUpperCase(),
           rowIndex: idx + 2,
           row
@@ -325,7 +327,9 @@ export async function findPatient(target, config) {
         found: true,
         patient: {
           id: String(row[0]),
-          nombre: `${row[1] || ''} ${row[2] || ''}`.trim(),
+          nombre: (row[1] || '').trim(),
+          apellidos: (row[2] || '').trim(),
+          fullName: `${row[1] || ''} ${row[2] || ''}`.trim(),
           estado: (row[18] || '').trim().toUpperCase(),
           rowIndex: idx + 2,
           row
@@ -344,7 +348,9 @@ export async function findPatient(target, config) {
       if (words.every(w => fullNameNorm.includes(w))) {
         matches.push({
           id: String(row[0]),
-          nombre: `${row[1] || ''} ${row[2] || ''}`.trim(),
+          nombre: (row[1] || '').trim(),
+          apellidos: (row[2] || '').trim(),
+          fullName: `${row[1] || ''} ${row[2] || ''}`.trim(),
           estado: (row[18] || '').trim().toUpperCase(),
           rowIndex: i + 2,
           row
@@ -580,6 +586,12 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
     }
   }
 
+  const patientFullName =
+    patient.fullName ||
+    `${patient.nombre || ''} ${patient.apellidos || ''}`.trim() ||
+    patient.nombre ||
+    'Paciente';
+
   // CASO 1: YA EXISTE UNA HISTORIA REGISTRADA HOY -> CONSOLIDAR Y ANEXAR NOTA
   if (existingIndex !== -1) {
     const existing = histRows[existingIndex];
@@ -639,7 +651,7 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
             String(existing[0]),
             JSON.stringify({
               pacienteId: patient.id,
-              paciente: `${patient.nombre} ${patient.apellidos}`,
+              paciente: patientFullName,
               accion: 'nota_agregada_mismo_dia'
             })
           ]]
@@ -652,7 +664,7 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
       isAppended: true,
       historyId: existing[0],
       patientId: patient.id,
-      patientName: `${patient.nombre} ${patient.apellidos}`.trim(),
+      patientName: patientFullName,
       fecha: existing[2],
       medico: existing[8] || medico,
       motivo: updatedRow[3],
@@ -710,7 +722,7 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
           JSON.stringify({
             origen: 'whatsapp_clinical_history',
             pacienteId: patient.id,
-            pacienteNombre: patient.nombre,
+            pacienteNombre: patientFullName,
             medico: medico,
             creadoPor: `whatsapp:${senderPhone}`
           })
@@ -726,7 +738,7 @@ export async function insertClinicalHistoryRow({ target, historyData, senderPhon
     isAppended: false,
     historyId: nextHistoryId,
     patientId: patient.id,
-    patientName: `${patient.nombre} ${patient.apellidos}`.trim(),
+    patientName: patientFullName,
     fecha: fechaConsulta,
     medico: medico,
     motivo: historyData.motivo,
