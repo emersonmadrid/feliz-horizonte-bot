@@ -341,7 +341,10 @@ export async function handleStaffIntakeInbound({
       if (res.ok) {
         const data = await res.json();
         console.log(`✅ [GATEWAY] Microservicio respondió OK: ${data.action || "success"}`);
-        if (data.replyText && typeof sendWhatsAppText === "function") {
+        if (data.buttons && Array.isArray(data.buttons) && data.buttons.length > 0 && typeof customSendButtons === "function") {
+          const promptBody = data.replyText?.split("\n\n")?.[0] || "¿Qué deseas realizar?";
+          await customSendButtons(from, promptBody, data.buttons);
+        } else if (data.replyText && typeof sendWhatsAppText === "function") {
           await sendWhatsAppText(from, data.replyText);
         }
         return data;
@@ -364,12 +367,17 @@ export async function handleStaffIntakeInbound({
   const stateKey = `staff_intake:${from}`;
   const cleanBody = (text || "").trim().toLowerCase();
 
-  // 1. Manejo de botones táctiles
+  // 1. Manejo de botones táctiles o números de opción
   if (
     buttonSelection === "btn_historia" ||
     cleanBody === "🧠 historia clínica" ||
     cleanBody === "historia clinica" ||
-    cleanBody === "historia clínica"
+    cleanBody === "historia clínica" ||
+    cleanBody === "1" ||
+    cleanBody === "1️⃣" ||
+    cleanBody === "1." ||
+    cleanBody === "opcion 1" ||
+    cleanBody === "opción 1"
   ) {
     await sendText(from, "Envía el nombre del paciente y las notas de la sesión.");
     return { ok: true, action: "button_prompt_historia" };
@@ -378,7 +386,12 @@ export async function handleStaffIntakeInbound({
   if (
     buttonSelection === "btn_actualizar" ||
     cleanBody === "📝 actualizar datos" ||
-    cleanBody === "actualizar datos"
+    cleanBody === "actualizar datos" ||
+    cleanBody === "2" ||
+    cleanBody === "2️⃣" ||
+    cleanBody === "2." ||
+    cleanBody === "opcion 2" ||
+    cleanBody === "opción 2"
   ) {
     await sendText(from, "Indica el paciente y el dato a modificar.");
     return { ok: true, action: "button_prompt_actualizar" };
@@ -388,7 +401,12 @@ export async function handleStaffIntakeInbound({
     buttonSelection === "btn_alta" ||
     cleanBody === "📋 nuevo paciente" ||
     cleanBody === "nuevo paciente" ||
-    cleanBody === "alta paciente"
+    cleanBody === "alta paciente" ||
+    cleanBody === "3" ||
+    cleanBody === "3️⃣" ||
+    cleanBody === "3." ||
+    cleanBody === "opcion 3" ||
+    cleanBody === "opción 3"
   ) {
     await sendText(from, "Pega los datos del paciente o reenvía su contacto.");
     return { ok: true, action: "button_prompt_alta" };
