@@ -341,9 +341,13 @@ export async function handleStaffIntakeInbound({
       if (res.ok) {
         const data = await res.json();
         console.log(`✅ [GATEWAY] Microservicio respondió OK: ${data.action || "success"}`);
-        if (data.buttons && Array.isArray(data.buttons) && data.buttons.length > 0 && typeof customSendButtons === "function") {
+        if (data.buttons && Array.isArray(data.buttons) && data.buttons.length > 0) {
           const promptBody = data.replyText?.split("\n\n")?.[0] || "¿Qué deseas realizar?";
-          await customSendButtons(from, promptBody, data.buttons);
+          if (typeof customSendButtons === "function") {
+            await customSendButtons(from, promptBody, data.buttons);
+          } else {
+            await replyButtons(from, promptBody, data.buttons, loadConfig(env), customSendButtons);
+          }
         } else if (data.replyText && typeof sendWhatsAppText === "function") {
           await sendWhatsAppText(from, data.replyText);
         }

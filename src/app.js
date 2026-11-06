@@ -415,6 +415,42 @@ async function sendWhatsAppButtons(to) {
   console.log(`✅ Botones enviados a ${to}`);
 }
 
+async function sendWhatsAppInteractiveReplyButtons(to, text, buttons) {
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.log(`📱 [SIMULADO] Botones interactivos WhatsApp → ${to}: ${text}`);
+    return;
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  console.log(`📤 Enviando botones interactivos a ${to}: ${text}`);
+  try {
+    await axios.post(
+      url,
+      {
+        messaging_product: "whatsapp",
+        to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text },
+          action: {
+            buttons: buttons.slice(0, 3).map((b) => ({
+              type: "reply",
+              reply: { id: b.id, title: b.title.slice(0, 20) },
+            })),
+          },
+        },
+      },
+      { headers: { Authorization: `Bearer ${WHATSAPP_API_TOKEN}` } }
+    );
+    console.log(`✅ Botones interactivos enviados con éxito a ${to}`);
+  } catch (err) {
+    console.warn(`⚠️ Error al enviar botones interactivos (${err?.response?.data?.error?.message || err.message}). Enviando texto alternativo...`);
+    const fallback = `${text}\n\n` + buttons.map((b, i) => `${i + 1}️⃣ ${b.title}`).join("\n");
+    await sendWhatsAppText(to, fallback);
+  }
+}
+
 function guessFilenameFromMime(mediaId, mimeType, fallbackPrefix = "file") {
   const safeId = mediaId || Date.now();
   const extension = (mimeType?.split("/")[1] || "bin").split(";")[0];
@@ -2097,6 +2133,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
         buttonSelection,
         env: process.env,
         sendWhatsAppText,
+        sendWhatsAppButtons: sendWhatsAppInteractiveReplyButtons,
         notifyTelegram,
         auditLogger: (payload) => safeLogInboundAudit(getReminderConfigForAudit(), payload),
       });
