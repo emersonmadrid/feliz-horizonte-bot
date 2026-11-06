@@ -22,11 +22,12 @@ if (!API_KEY || !API_KEY.startsWith("AIza")) {
   console.error("❌ GEMINI_API_KEY inválida o vacía. Revisa tu .env");
 }
 
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const genAI = new GoogleGenerativeAI(API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-const multimodalModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const model = genAI.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL });
+const multimodalModel = genAI.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL });
 const audioReplyModel = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash",
+  model: DEFAULT_GEMINI_MODEL,
   generationConfig: {
     responseMimeType: "audio/mpeg",
   },
@@ -654,30 +655,70 @@ export async function transcribeAudioBuffer({ buffer, mimeType = "audio/ogg", pr
     prompt ||
     "Transcribe con precisión este audio, conserva la puntuación natural y no agregues comentarios adicionales.";
 
-  try {
-    const response = await multimodalModel.generateContent({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: instruction },
-            {
-              inlineData: {
-                data: buffer.toString("base64"),
-                mimeType,
-              },
-            },
-          ],
-        },
-      ],
-    });
+  // Limpiar parámetros adicionales del MIME type (ej. audio/ogg; codecs=opus -> audio/ogg)
+  const cleanMime = (mimeType || "audio/ogg").split(";")[0].trim().toLowerCase();
 
-    const transcription = response?.response?.text?.() || response?.response?.text || "";
-    return (typeof transcription === "function" ? transcription() : transcription)?.trim() || "";
-  } catch (err) {
-    console.error("❌ Error transcribiendo audio:", err?.message);
-    throw err;
+  const models = [
+    process.env.GEMINI_AUDIO_MODEL || "gemini-3.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-flash-latest",
+    "gemini-2.5-flash",
+  ];
+  const uniqueModels = [...new Set(models.filter(Boolean))];
+
+  let lastError = null;
+  for (const modelName of uniqueModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${API_KEY}`;
+      const payload = {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: instruction },
+              {
+                inlineData: {
+                  mimeType: cleanMime,
+                  data: buffer.toString("base64"),
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.warn(`⚠️ Modelo ${modelName} falló transcribiendo (${res.status}): ${errorText.slice(0, 100)}`);
+        lastError = new Error(`HTTP ${res.status}: ${errorText.slice(0, 100)}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      const transcription = parts
+        .map((p) => p.text)
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      if (transcription) {
+        return transcription;
+      }
+    } catch (err) {
+      console.warn(`⚠️ Error transcribiendo audio con ${modelName}:`, err.message);
+      lastError = err;
+    }
   }
+
+  console.error("❌ No se pudo transcribir el audio con ningún modelo:", lastError?.message);
+  throw lastError || new Error("No se pudo transcribir el audio.");
 }
 
 export async function synthesizeAudioFromText(text, { promptPrefix = null } = {}) {

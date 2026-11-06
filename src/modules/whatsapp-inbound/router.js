@@ -8,8 +8,8 @@ function clean(value) {
   return String(value || "").trim();
 }
 
-export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
-  if (!text || !from) return false;
+export function isStaffPhone(from, env = process.env) {
+  if (!from) return false;
 
   const authorizedPhones = (env.AUTHORIZED_STAFF_PHONES || "51922346747,51936597327")
     .split(",")
@@ -17,11 +17,14 @@ export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
     .filter(Boolean);
 
   const cleanFrom = String(from).replace(/\D/g, "");
-  const isStaff = authorizedPhones.some(
+  return authorizedPhones.some(
     (phone) => cleanFrom.includes(phone) || phone.includes(cleanFrom)
   );
+}
 
-  return isStaff;
+export function isStaffIntakeMessage({ text, from, env = process.env } = {}) {
+  if (!text || !from) return false;
+  return isStaffPhone(from, env);
 }
 
 export function getWhatsappInboundRoute({ text, from, env = process.env } = {}) {

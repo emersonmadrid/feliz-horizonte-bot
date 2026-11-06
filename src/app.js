@@ -2059,6 +2059,32 @@ app.post("/webhook/whatsapp", async (req, res) => {
       text = buttonSelection;
     }
 
+    if (!text && audioPayload) {
+      try {
+        audioTranscriptionInfo = await transcribeWhatsAppAudio(msg);
+        text = audioTranscriptionInfo.text?.trim() || "";
+
+        if (!text) {
+          throw new Error("Transcripción vacía");
+        }
+      } catch (err) {
+        console.error("❌ No se pudo transcribir el audio:", err?.response?.data || err.message);
+        await notifyTelegram(
+          "⚠️ AUDIO SIN TRANSCRIPCIÓN",
+          [
+            `ID: ${audioPayload?.id || "N/A"}`,
+            `Motivo: ${err?.message || "Error desconocido"}`,
+          ],
+          from
+        );
+        await sendWhatsAppText(
+          from,
+          "Recibí tu audio pero no pude procesarlo. ¿Podrías escribirme lo más importante por texto, por favor? 💙"
+        );
+        return res.sendStatus(200);
+      }
+    }
+
     let incomingTelegramLine = summarizeInboundMessage({ text, type: msg.type });
 
     const inboundRoute = getWhatsappInboundRoute({ text, from, env: process.env });
@@ -2090,33 +2116,6 @@ app.post("/webhook/whatsapp", async (req, res) => {
       });
 
       return res.sendStatus(200);
-    }
-
-    if (!text && audioPayload) {
-      try {
-        audioTranscriptionInfo = await transcribeWhatsAppAudio(msg);
-        text = audioTranscriptionInfo.text?.trim();
-        incomingTelegramLine = summarizeInboundMessage({ text, type: msg.type });
-
-        if (!text) {
-          throw new Error("Transcripción vacía");
-        }
-      } catch (err) {
-        console.error("❌ No se pudo transcribir el audio:", err?.response?.data || err.message);
-        await notifyTelegram(
-          "⚠️ AUDIO SIN TRANSCRIPCIÓN",
-          [
-            `ID: ${audioPayload?.id || "N/A"}`,
-            `Motivo: ${err?.message || "Error desconocido"}`,
-          ],
-          from
-        );
-        await sendWhatsAppText(
-          from,
-          "Recibí tu audio pero no pude procesarlo. ¿Podrías escribirme lo más importante por texto, por favor? 💙"
-        );
-        return res.sendStatus(200);
-      }
     }
 
     const mediaPayload = documentPayload || imagePayload;
